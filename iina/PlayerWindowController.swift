@@ -163,17 +163,7 @@ class PlayerWindowController: NSWindowController, NSWindowDelegate {
   /** We need to pause the video when a user starts seeking by scrolling.
    This property records whether the video is paused initially so we can
    recover the status when scrolling finished. */
-  private var wasPlayingBeforeSeeking = false
-
-  /** The value of `PlaybackInfo.fileStartCount` when the current scroll began. When the value
-   has changed the scroll has carried playback into another file. */
-  private var fileStartCountBeforeScroll = 0
-
-  /** The time of the most recent scroll event from a mouse wheel. */
-  private var lastMouseWheelEventTime: TimeInterval = 0
-
-  /** The longest time in seconds between two events from a mouse wheel that are one scroll. */
-  private let maxMouseWheelEventInterval: TimeInterval = 0.5
+  private var scrollGesture = ScrollGesture()
   
   /** Subclasses should set these value to true if the mouse is in some
    special views (e.g. volume slider, play slider) before calling
@@ -489,23 +479,6 @@ class PlayerWindowController: NSWindowController, NSWindowDelegate {
     let isMouse = event.phase.isEmpty
     let isTrackpadBegan = event.phase.contains(.began)
     let isTrackpadEnd = event.phase.contains(.ended)
-    // The momentum events that follow scrolling on a trackpad have an empty phase as well.
-    let isMouseWheel = isMouse && event.momentumPhase.isEmpty
-
-    // A scroll begins when fingers start moving on the trackpad and lasts through the momentum
-    // that follows. A mouse wheel does not report when a scroll begins, its events are one scroll
-    // while they follow each other closely. The events of a scroll that has carried playback into
-    // another file can arrive late while that file loads, so the scroll lasts through the loading.
-    let lastScrollTime = max(lastMouseWheelEventTime, player.info.loadAfterScrollSeekEndTime)
-    let isMouseWheelBegan = isMouseWheel && !player.info.isLoadingAfterScrollSeek
-      && event.timestamp - lastScrollTime > maxMouseWheelEventInterval
-    if isMouseWheel {
-      lastMouseWheelEventTime = event.timestamp
-    }
-    if isTrackpadBegan || isMouseWheelBegan {
-      fileStartCountBeforeScroll = player.info.fileStartCount
-    }
-    let movedToAnotherFile = player.info.fileStartCount != fileStartCountBeforeScroll
 
     // determine direction
 
@@ -532,22 +505,20 @@ class PlayerWindowController: NSWindowController, NSWindowDelegate {
       }
     }
 
-    // pause video when seek begins
-
-    if scrollAction == .seek && isTrackpadBegan {
-      // record pause status
-      if player.info.state == .playing {
-        player.pause()
-        wasPlayingBeforeSeeking = true
-      }
+    // Decide which scroll the event belongs to, and pause playback while a trackpad scroll seeks.
+    // The momentum events that follow scrolling on a trackpad have an empty phase as well.
+    let gestureEvent = ScrollGesture.Event(isTrackpadBegan: isTrackpadBegan, isTrackpadEnded: isTrackpadEnd,
+                                           isMouseWheel: isMouse && event.momentumPhase.isEmpty,
+                                           timestamp: event.timestamp)
+    let outcome = scrollGesture.handle(gestureEvent, seeks: scrollAction == .seek,
+                                       isPlaying: player.info.state == .playing,
+                                       fileStartCount: player.info.fileStartCount,
+                                       loading: player.info.scrollSeekLoading)
+    if outcome.pausesPlayback {
+      player.pause()
     }
-
-    if isTrackpadEnd && wasPlayingBeforeSeeking {
-      // only resume playback when it was playing before seeking
-      if wasPlayingBeforeSeeking {
-        player.resume()
-      }
-      wasPlayingBeforeSeeking = false
+    if outcome.resumesPlayback {
+      player.resume()
     }
 
     // handle the delta value
@@ -570,9 +541,7 @@ class PlayerWindowController: NSWindowController, NSWindowDelegate {
     
     switch scrollAction {
     case .seek:
-      // Once the scroll has carried playback into another file the rest of the scroll, including
-      // its momentum, must not seek in that file.
-      guard !movedToAnotherFile else { break }
+      guard outcome.maySeek else { break }
       let seekAmount = (isMouse ? AppData.seekAmountMapMouse : AppData.seekAmountMap)[relativeSeekAmount] * delta
       player.seek(relativeSecond: seekAmount, option: useExactSeek, byScrolling: true)
     case .volume:

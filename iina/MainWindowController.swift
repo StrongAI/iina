@@ -2594,7 +2594,7 @@ class MainWindowController: PlayerWindowController {
     if !isVideoLoaded {
       // When the file has just been loaded the player generates thumbnails itself once playback
       // has started, see PlayerCore.notifyWindowVideoSizeChanged.
-      if player.info.state != .loaded {
+      if EntryStart.windowGeneratesThumbnails(player.info.state) {
         player.generateThumbnails()
       }
       isVideoLoaded = true

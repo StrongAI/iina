@@ -115,21 +115,9 @@ class MPVController: NSObject {
   var recordedSeekStartTime: CFTimeInterval = 0
   var recordedSeekTimeListener: ((Double) -> Void)?
 
-  /// Whether `mpv` has accepted a seek issued by a scroll and has not started it.
-  /// - Important: This must only be accessed by the thread of the queue for reading `mpv` events.
-  private var isScrollSeekPending = false
-
   /// Whether the seek `mpv` is performing was issued by a scroll.
   /// - Important: This must only be accessed by the thread of the queue for reading `mpv` events.
-  private var isScrollSeeking = false
-
-  /// The time at which `mpv` restarted playback after its most recent seek, if that seek was issued by a scroll.
-  /// - Important: This must only be accessed by the thread of the queue for reading `mpv` events.
-  private var scrollSeekEndTime: CFTimeInterval?
-
-  /// The longest time in seconds from `mpv` restarting playback after a seek to the file ending for the seek to have ended the
-  /// file by running past its end.
-  private let maxSeekEndToFileEndInterval: CFTimeInterval = 0.5
+  private var scrollSeekAttribution = ScrollSeekAttribution()
 
   @Atomic private var hooks: [UInt64: MPVHookValue] = [:]
   private var hookCounter: UInt64 = 1
@@ -553,7 +541,7 @@ class MPVController: NSObject {
 
     setUserOption(PK.enableCache, type: .other, forName: MPVOption.Cache.cache,
                   verboseIfDefault: true) { key in
-      return Preference.bool(for: key) ? "yes" : "no"
+      return CacheConfiguration.cache(enabled: Preference.bool(for: key))
     }
 
     setUserOption(PK.cachePauseInitial, type: .bool, forName: MPVOption.Cache.cachePauseInitial,
@@ -562,7 +550,7 @@ class MPVController: NSObject {
                   verboseIfDefault: true)
     setUserOption(PK.defaultCacheSize, type: .other, forName: MPVOption.Demuxer.demuxerMaxBytes,
                   verboseIfDefault: true) { key in
-      return "\(Preference.integer(for: key))KiB"
+      return CacheConfiguration.demuxerMaxBytes(kibibytes: Preference.integer(for: key))
     }
     setUserOption(PK.secPrefech, type: .int, forName: MPVOption.Cache.cacheSecs, verboseIfDefault: true)
 
@@ -1168,9 +1156,7 @@ class MPVController: NSObject {
       DispatchQueue.main.async { self.player.fileLoaded() }
 
     case MPV_EVENT_SEEK:
-      // The seek mpv has started performs every seek mpv has accepted since it last started one.
-      isScrollSeeking = isScrollSeekPending
-      isScrollSeekPending = false
+      scrollSeekAttribution.seekStarted()
       DispatchQueue.main.async { [self] in
         player.info.isSeeking = true
         // When playback is paused the display link may be shutdown in order to not waste energy.
@@ -1188,14 +1174,10 @@ class MPVController: NSObject {
       }
 
     case MPV_EVENT_PLAYBACK_RESTART:
-      scrollSeekEndTime = isScrollSeeking ? CACurrentMediaTime() : nil
-      isScrollSeeking = false
+      scrollSeekAttribution.playbackRestarted(at: CACurrentMediaTime())
       DispatchQueue.main.async { [self] in
         player.info.isSeeking = false
-        if player.info.isLoadingAfterScrollSeek {
-          player.info.isLoadingAfterScrollSeek = false
-          player.info.loadAfterScrollSeekEndTime = ProcessInfo.processInfo.systemUptime
-        }
+        player.info.scrollSeekLoading.playbackRestarted(at: ProcessInfo.processInfo.systemUptime)
         // When playback is paused the display link may be shutdown in order to not waste energy.
         // The display link will be restarted while seeking. If playback is paused shut it down
         // again.
@@ -1213,18 +1195,6 @@ class MPVController: NSObject {
     case MPV_EVENT_END_FILE:
       let reason = event.pointee.data.load(as: mpv_end_file_reason.self)
       let dueToStopCommand = reason == MPV_END_FILE_REASON_STOP
-      // Playback has left the file, stop scanning it for thumbnails. This is done here and not in
-      // PlayerCore.fileEnded so that the scan does not continue until the main thread is free.
-      player.ffmpegController.cancelThumbnailGeneration()
-      // When a seek runs past the end of a file during playback mpv restarts playback and then
-      // ends the file at once.
-      let endedByScrollSeek = isScrollSeeking || scrollSeekEndTime.map {
-        CACurrentMediaTime() - $0 < maxSeekEndToFileEndInterval
-      } ?? false
-      // A seek mpv has not started by now is discarded by mpv.
-      isScrollSeekPending = false
-      isScrollSeeking = false
-      scrollSeekEndTime = nil
       // When the IINA "Pause" setting is enabled under "When media is opened" IINA must tell mpv to
       // pause playback ASAP. Events are delivered asynchronously. If the IINA
       // "Play next item automatically" setting is enabled mpv will currently be loading the next
@@ -1234,16 +1204,10 @@ class MPVController: NSObject {
       // loaded. As handling this does not require accessing IINA state not protected by locks and
       // only available to the main thread along with the requirement to pause playback ASAP we will
       // not leave this to the PlayerCore function and handle this now before calling fileEnded.
-      // When the file was ended by a seek issued by a scroll playback is left as the scroll has
-      // it, so that the next item plays exactly when playback was playing before the scroll.
-      if !dueToStopCommand, Preference.bool(for: .pauseWhenOpen), !endedByScrollSeek {
-        setFlag(MPVOption.PlaybackControl.pause, true, level: .verbose)
-        // Normally a log message is emitted before calling mpv, but in this case, due to the race
-        // condition, playback must be paused as soon as possible, so logging is done afterward.
-        log("Pausing playback because \"pause when media is opened\" is enabled")
-      }
+      let endedByScrollSeek = FileEnd.fileEnded(self, dueToStopCommand: dueToStopCommand,
+                                                attribution: &scrollSeekAttribution, at: CACurrentMediaTime())
       DispatchQueue.main.async { [self] in
-        player.info.isLoadingAfterScrollSeek = endedByScrollSeek
+        player.info.scrollSeekLoading.fileEnded(byScrollSeek: endedByScrollSeek)
         player.fileEnded(dueToStopCommand)
       }
 
@@ -1263,9 +1227,8 @@ class MPVController: NSObject {
           break
         }
         DispatchQueue.main.async { self.player.screenshotCallback() }
-      } else if reply == MPVController.UserData.scrollSeek, event.pointee.error >= 0 {
-        // mpv has accepted a seek issued by a scroll. The next seek mpv starts performs it.
-        isScrollSeekPending = true
+      } else {
+        scrollSeekAttribution.commandReplied(userdata: reply, error: event.pointee.error)
       }
 
     case MPV_EVENT_QUEUE_OVERFLOW:
@@ -1817,7 +1780,7 @@ class MPVController: NSObject {
     }
   }
 
-  private func log(_ message: @autoclosure () -> String, level: Logger.Level = .debug) {
+  func log(_ message: @autoclosure () -> String, level: Logger.Level = .debug) {
     Logger.log(message, level: level, subsystem: subsystem)
   }
 
@@ -1883,6 +1846,19 @@ class MPVController: NSObject {
     guard Preference.bool(for: .enableAdvancedSettings),
           let userOptions = Preference.value(for: .userOptions) as? [[String]] else { return false }
     return userOptions.contains { $0[0] == option }
+  }
+}
+
+extension MPVController: FileEndPlayer {
+
+  var pausesWhenOpened: Bool { Preference.bool(for: .pauseWhenOpen) }
+
+  func pauseMpv() {
+    setFlag(MPVOption.PlaybackControl.pause, true, level: .verbose)
+  }
+
+  func cancelThumbnailGeneration() {
+    player.ffmpegController.cancelThumbnailGeneration()
   }
 }
 

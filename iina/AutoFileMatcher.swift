@@ -45,7 +45,7 @@ class AutoFileMatcher {
   /// The folder is matched once, for the file that was opened, and its files and subtitles serve every entry in the playlist.
   /// Matching therefore continues when playback moves to another entry.
   private func checkTicket() throws {
-    try player.checkFolderPlaylistTicket(ticket)
+    try player.folderPlaylistTicket.check(ticket)
   }
 
   private var mediaFiles: [FileInfo] {
@@ -125,23 +125,7 @@ class AutoFileMatcher {
   private func addFilesToPlaylist() throws {
     log("Adding files to playlist")
     let files = filesGroupedByMediaType[.video]! + filesGroupedByMediaType[.audio]!
-    let currentPath = player.info.currentURL?.path
-    let currentIndex = files.firstIndex { $0.url.path == currentPath }
-
-    // The files after the opened file are added first so that the next entry is available as soon
-    // as possible.
-    if let currentIndex {
-      for video in files[(currentIndex + 1)...] {
-        try checkTicket()
-        player.appendToPlaylist(video.path, silent: true)
-      }
-    }
-    // The files before the opened file are inserted ahead of it in order. If the opened file is
-    // not among the files found then all of them are.
-    for (index, video) in files[..<(currentIndex ?? files.count)].enumerated() {
-      try checkTicket()
-      player.mpv.playlistInsert(video.path, index: index)
-    }
+    try FolderPlaylistAssembly.add(files.map { $0.path }, openedPath: player.info.currentURL?.path, to: self)
   }
 
   private func matchVideoAndSubSeries() throws -> [String: String] {
@@ -383,5 +367,20 @@ class AutoFileMatcher {
       log(err.localizedDescription, level: .error)
       return
     }
+  }
+}
+
+extension AutoFileMatcher: FolderPlaylist {
+
+  func checkFolderTicket() throws {
+    try checkTicket()
+  }
+
+  func append(_ path: String) {
+    player.appendToPlaylist(path, silent: true)
+  }
+
+  func insert(_ path: String, at index: Int) {
+    player.mpv.playlistInsert(path, index: index)
   }
 }

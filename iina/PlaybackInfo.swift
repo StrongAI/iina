@@ -148,12 +148,7 @@ class PlaybackInfo {
   @Atomic var fileStartCount = 0
 
   /// Whether the current file is loading because a seek issued by a scroll ran past the end of the previous file.
-  ///
-  /// This is `true` from the end of the previous file until playback of the current file has started.
-  var isLoadingAfterScrollSeek = false
-
-  /// The time at which `isLoadingAfterScrollSeek` last became `false`, as system uptime, the time base of `NSEvent.timestamp`.
-  var loadAfterScrollSeekEndTime: TimeInterval = 0
+  var scrollSeekLoading = ScrollSeekLoading()
 
   var isMatchingSubtitles = false
   var disableOSDForFileLoading: Bool = false

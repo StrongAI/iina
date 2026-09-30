@@ -191,16 +191,9 @@ class PlayerCore: NSObject {
    */
   @Atomic var backgroundQueueTicket = 0
 
-  /**
-   This ticket will be increased each time the playlist is abandoned: when another file is opened
-   and when the background task is told to stop.
-
-   The task matching the files in the folder of the opened file, which adds them to the playlist,
-   holds a copy of the ticket value at creation. Unlike `backgroundQueueTicket` this ticket is not
-   increased when playback moves to another entry in the playlist, so that the task continues
-   until every file in the folder has been added and matched.
-   */
-  @Atomic var folderPlaylistTicket = 0
+  /// Identifies the playlist of the opened file. The task matching the files in the folder of the opened file, which adds them to
+  /// the playlist, holds a copy of the ticket value at creation.
+  let folderPlaylistTicket = FolderPlaylistTicket()
 
   enum TicketExpiredError: Error {
     case ticketExpired
@@ -588,7 +581,7 @@ class PlayerCore: NSObject {
 
     // The load file command replaces the playlist. Stop adding the files in the folder of the file
     // previously opened to the playlist.
-    $folderPlaylistTicket.withLock { $0 += 1 }
+    folderPlaylistTicket.abandon()
 
     // Send load file command
     info.justOpenedFile = true
@@ -737,7 +730,7 @@ class PlayerCore: NSObject {
   private func stopBackgroundTask() {
     log("Stopping background task")
     $backgroundQueueTicket.withLock { $0 += 1 }
-    $folderPlaylistTicket.withLock { $0 += 1 }
+    folderPlaylistTicket.abandon()
   }
 
   /// Respond to the mpv core shutting down.
@@ -914,9 +907,7 @@ class PlayerCore: NSObject {
   // MARK: - MPV commands
 
   func togglePause(_ set: Bool? = nil) {
-    // While playback is paused for the loading of an entry the entry is about to play, so the
-    // toggle asks for a pause. The pause keeps the entry paused once it has loaded.
-    info.state == .paused && !info.pausedForLoading ? resume() : pause()
+    PlaylistStepping.togglePause(self)
   }
 
   /// Pause playback.
@@ -929,11 +920,7 @@ class PlayerCore: NSObject {
   ///     asleep. Thus `setFlag` **must not** be called if the `mpv` core is idle or stopping. See issue
   ///     [#4520](https://github.com/iina/iina/issues/4520)
   func pause() {
-    guard info.state.active else { return }
-    log("Pausing playback")
-    // A pause given while a file is loading must not be undone once the file has loaded.
-    info.pausedForLoading = false
-    mpv.setFlag(MPVOption.PlaybackControl.pause, true, level: .verbose)
+    PlaylistStepping.pause(self)
   }
 
   /// Resume playback.
@@ -1630,15 +1617,7 @@ class PlayerCore: NSObject {
   ///     clicking in the playlist on the entry that is currently playing reloads that entry.
   /// - Parameter pos: Position of the entry in the playlist to be played.
   func playFileInPlaylist(_ pos: Int) {
-    mainWindow.videoView.displayActive()
-    if !mpv.getFlag(MPVOption.PlaybackControl.pause) {
-      log("Pausing playback before playing entry at index \(pos) in the playlist")
-      mpv.setFlag(MPVOption.PlaybackControl.pause, true, level: .verbose)
-    }
-    info.pausedForLoading = true
-    ffmpegController.cancelThumbnailGeneration()
-    mpv.command(.playlistPlayIndex, args: [String(pos)], level: .verbose)
-    getPlaylist()
+    PlaylistStepping.play(self, at: pos)
   }
 
   /// Play the next or the previous entry in the playlist.
@@ -1657,29 +1636,7 @@ class PlayerCore: NSObject {
   ///     resumes playback.
   /// - Parameter nextMedia: When `true` play the next entry in the playlist; otherwise play the previous entry.
   func navigateInPlaylist(nextMedia: Bool) {
-    guard !mainWindow.interactiveMode.isActive else { return }
-
-    if nextMedia == false && (info.playlist.first?.isPlaying) ?? false {
-      seek(absoluteSecond: 0)
-    } else {
-      // mpv rejects the command when there is no entry to move to, as when the last entry is
-      // playing and the playlist does not loop. Playback is then left as it is, so playback is
-      // paused for loading only once mpv has accepted the command.
-      mpv.command(nextMedia ? .playlistNext : .playlistPrev, checkError: false) { [self] returnValue in
-        guard returnValue >= 0 else {
-          log("Not playing \(nextMedia ? "next" : "previous") entry in playlist, there is no entry to move to")
-          return
-        }
-        // Playback is leaving the entry, stop scanning it for thumbnails.
-        ffmpegController.cancelThumbnailGeneration()
-        mainWindow.videoView.displayActive()
-        if !mpv.getFlag(MPVOption.PlaybackControl.pause) {
-          log("Pausing playback before playing \(nextMedia ? "next" : "previous") entry in playlist")
-          mpv.setFlag(MPVOption.PlaybackControl.pause, true, level: .verbose)
-        }
-        info.pausedForLoading = true
-      }
-    }
+    PlaylistStepping.step(self, forward: nextMedia)
   }
 
   @discardableResult
@@ -2155,12 +2112,9 @@ class PlayerCore: NSObject {
 
     // Auto load
     $backgroundQueueTicket.withLock { $0 += 1 }
-    let shouldAutoLoadFiles = info.shouldAutoLoadFiles
-    // The files in the folder are loaded once, for the file that was opened. Moving to another
-    // entry in the playlist must not load them again.
-    info.shouldAutoLoadFiles = false
+    let shouldAutoLoadFiles = FolderPlaylistTicket.takeRequest(&info.shouldAutoLoadFiles)
     let currentTicket = backgroundQueueTicket
-    let currentPlaylistTicket = folderPlaylistTicket
+    let currentPlaylistTicket = folderPlaylistTicket.value
     backgroundTaskInUse = true
     backgroundQueue.async { [self] in
       do {
@@ -2434,12 +2388,7 @@ class PlayerCore: NSObject {
   }
 
   func pauseChanged(_ paused: Bool) {
-    guard mainWindow.loaded, info.state.loaded else { return }
-    // mpv delivers property changes only once its event queue is empty, so the change caused by
-    // pausing playback before loading a file can arrive after MPV_EVENT_FILE_LOADED. Until the
-    // video is ready the state must remain loaded, otherwise notifyWindowVideoSizeChanged would
-    // not resume playback.
-    guard info.state != .loaded else { return }
+    guard mainWindow.loaded, info.state.loaded, EntryStart.pauseChangeUpdatesState(info.state) else { return }
     if (info.state == .paused) != paused {
       sendOSD(paused ? .pause : .resume)
       // The NowPlayingInfoManager is notified when playback is paused or resumed. The video
@@ -2805,29 +2754,14 @@ class PlayerCore: NSObject {
       currentController.showWindow(self)
       AppDelegate.shared.openURLWindow.close()
     }
-    if info.state == .loaded {
-      // If the media was loaded manually then playback was paused to avoid audio starting to play
-      // before video is ready to be displayed. Now that the video is ready playback can be resumed
-      // unless the IINA "Pause" setting is enabled under "When media is opened" or the user paused
-      // playback while the media was loading.
-      var paused = mpv.getFlag(MPVOption.PlaybackControl.pause)
-      if paused, info.pausedForLoading, !Preference.bool(for: .pauseWhenOpen)  {
-        log("Resuming playback now that file has been loaded")
-        mainWindow.videoView.displayActive()
-        mpv.setFlag(MPVOption.PlaybackControl.pause, false, level: .verbose)
-        paused = false
-      }
-      info.pausedForLoading = false
-      info.state = paused ? .paused : .playing
+    // If the media was loaded manually then playback was paused to avoid audio starting to play
+    // before video is ready to be displayed. Now that the video is ready the play state is decided.
+    if EntryStart.decidePlayState(self) {
       syncUI(.playButton)
       if Preference.bool(for: .fullScreenWhenOpen) && !mainWindow.fsState.isFullscreen && !isInMiniPlayer {
         mainWindow.toggleWindowFullScreen()
       }
-      // Thumbnails are generated only once playback has started so that scanning the file does
-      // not delay it.
-      if mainWindow.isVideoLoaded {
-        generateThumbnails()
-      }
+      EntryStart.startThumbnails(self)
     }
   }
 
@@ -3128,12 +3062,6 @@ class PlayerCore: NSObject {
     }
   }
 
-  func checkFolderPlaylistTicket(_ ticket: Int) throws {
-    if folderPlaylistTicket != ticket {
-      throw TicketExpiredError.ticketExpired
-    }
-  }
-
   /**
    Non-nil and non-zero width/height value calculated for video window, from current `dwidth`
    and `dheight` while taking pure audio files and video rotations into consideration.
@@ -3265,6 +3193,63 @@ class PlayerCore: NSObject {
       }
     }
     self.info.setCachedMetadata(path, result)
+  }
+}
+
+// MARK: - Moving between playlist entries
+
+extension PlayerCore: PlaylistSteppingPlayer, EntryStartPlayer {
+
+  var playerState: PlayerState {
+    get { info.state }
+    set { info.state = newValue }
+  }
+
+  var isMpvPaused: Bool { mpv.getFlag(MPVOption.PlaybackControl.pause) }
+
+  var pausedForLoading: Bool {
+    get { info.pausedForLoading }
+    set { info.pausedForLoading = newValue }
+  }
+
+  var isInteractiveModeActive: Bool { mainWindow.interactiveMode.isActive }
+
+  var isFirstEntryPlaying: Bool { info.playlist.first?.isPlaying ?? false }
+
+  var pausesWhenOpened: Bool { Preference.bool(for: .pauseWhenOpen) }
+
+  var isVideoLoaded: Bool { mainWindow.isVideoLoaded }
+
+  func seekToStart() {
+    seek(absoluteSecond: 0)
+  }
+
+  func movePlaylistPosition(forward: Bool, reply: @escaping (Int32) -> Void) {
+    mpv.command(forward ? .playlistNext : .playlistPrev, checkError: false, returnValueCallback: reply)
+  }
+
+  func playPlaylistEntry(at index: Int) {
+    mpv.command(.playlistPlayIndex, args: [String(index)], level: .verbose)
+  }
+
+  func refreshPlaylist() {
+    getPlaylist()
+  }
+
+  func pauseMpv() {
+    mpv.setFlag(MPVOption.PlaybackControl.pause, true, level: .verbose)
+  }
+
+  func resumeMpv() {
+    mpv.setFlag(MPVOption.PlaybackControl.pause, false, level: .verbose)
+  }
+
+  func cancelThumbnailGeneration() {
+    ffmpegController.cancelThumbnailGeneration()
+  }
+
+  func displayActive() {
+    mainWindow.videoView.displayActive()
   }
 }
 
