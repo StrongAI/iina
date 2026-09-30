@@ -12,6 +12,10 @@ start() {
   open_file $R/clip01.mp4; sleep 2
   if [ "$2" = playing ]; then [ "$1" = on ] && menu Playback "Resume"; else [ "$1" = on ] || menu Playback "Pause"; fi
   sleep 0.5
+  # A case whose playback is not in the state asked for before the gesture says nothing about the
+  # gesture, so it is marked.
+  want=$([ "$2" = playing ] && echo False || echo True)
+  ipc pause | grep -q "pause = $want" || echo "SETUP-FAILED: pause is not $want before the gesture, the next result is invalid"
   D=$(ipc duration | sed "s/.*= //"); cmd set_property time-pos $(python3 -c "print($D - ${3:-2})"); sleep 0.4
 }
 arrow() { osascript -e "tell application \"IINA\" to activate" -e "delay 0.5" -e "tell application \"System Events\" to key code 124"; }
