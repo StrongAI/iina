@@ -195,10 +195,10 @@ class PlayerCore: NSObject {
    This ticket will be increased each time the playlist is abandoned: when another file is opened
    and when the background task is told to stop.
 
-   The task adding the files in the folder of the opened file to the playlist holds a copy of the
-   ticket value at creation. Unlike `backgroundQueueTicket` this ticket is not increased when
-   playback moves to another entry in the playlist, so that the task continues until every file in
-   the folder has been added.
+   The task matching the files in the folder of the opened file, which adds them to the playlist,
+   holds a copy of the ticket value at creation. Unlike `backgroundQueueTicket` this ticket is not
+   increased when playback moves to another entry in the playlist, so that the task continues
+   until every file in the folder has been added and matched.
    */
   @Atomic var folderPlaylistTicket = 0
 
@@ -229,11 +229,11 @@ class PlayerCore: NSObject {
   private var pluginMap: [String: JavascriptPluginInstance] = [:]
   var events = EventController()
 
-  lazy var ffmpegController: FFmpegController = {
-    let controller = FFmpegController()
-    controller.delegate = self
-    return controller
-  }()
+  /// The controller that generates thumbnails.
+  ///
+  /// Thumbnail generation is cancelled from the thread of the queue for reading `mpv` events as well as from the main thread,
+  /// so the controller is created with the player and not on first use.
+  let ffmpegController = FFmpegController()
 
   lazy var info: PlaybackInfo = PlaybackInfo(self)
 
@@ -337,6 +337,7 @@ class PlayerCore: NSObject {
     playlistQueue = DispatchQueue(label: "IINAPlaylistTask\(playerNumber)", qos: .utility)
     thumbnailQueue = DispatchQueue(label: "IINAPlayerCoreThumbnailTask\(playerNumber)", qos: .utility)
     super.init()
+    ffmpegController.delegate = self
     self.mpv = MPVController(playerCore: self)
     self.mainWindow = MainWindowController(playerCore: self)
     self.miniPlayer = MiniPlayerWindowController(playerCore: self)
@@ -913,7 +914,9 @@ class PlayerCore: NSObject {
   // MARK: - MPV commands
 
   func togglePause(_ set: Bool? = nil) {
-    info.state == .paused ? resume() : pause()
+    // While playback is paused for the loading of an entry the entry is about to play, so the
+    // toggle asks for a pause. The pause keeps the entry paused once it has loaded.
+    info.state == .paused && !info.pausedForLoading ? resume() : pause()
   }
 
   /// Pause playback.
@@ -1657,26 +1660,25 @@ class PlayerCore: NSObject {
 
     if nextMedia == false && (info.playlist.first?.isPlaying) ?? false {
       seek(absoluteSecond: 0)
-    } else if nextMedia && isPlayingLastEntryWithoutLooping {
-      log("Not playing next entry in playlist, the last entry is playing and looping is off")
     } else {
-      mainWindow.videoView.displayActive()
-      if !mpv.getFlag(MPVOption.PlaybackControl.pause) {
-        log("Pausing playback before playing \(nextMedia ? "next" : "previous") entry in playlist")
-        mpv.setFlag(MPVOption.PlaybackControl.pause, true, level: .verbose)
+      // mpv rejects the command when there is no entry to move to, as when the last entry is
+      // playing and the playlist does not loop. Playback is then left as it is, so playback is
+      // paused for loading only once mpv has accepted the command.
+      mpv.command(nextMedia ? .playlistNext : .playlistPrev, checkError: false) { [self] returnValue in
+        guard returnValue >= 0 else {
+          log("Not playing \(nextMedia ? "next" : "previous") entry in playlist, there is no entry to move to")
+          return
+        }
+        // Playback is leaving the entry, stop scanning it for thumbnails.
+        ffmpegController.cancelThumbnailGeneration()
+        mainWindow.videoView.displayActive()
+        if !mpv.getFlag(MPVOption.PlaybackControl.pause) {
+          log("Pausing playback before playing \(nextMedia ? "next" : "previous") entry in playlist")
+          mpv.setFlag(MPVOption.PlaybackControl.pause, true, level: .verbose)
+        }
+        info.pausedForLoading = true
       }
-      info.pausedForLoading = true
-      ffmpegController.cancelThumbnailGeneration()
-      mpv.command(nextMedia ? .playlistNext : .playlistPrev, checkError: false)
     }
-  }
-
-  /// Whether the last entry in the playlist is playing and the playlist will not loop.
-  ///
-  /// When this is the case there is no next entry for mpv to move to.
-  private var isPlayingLastEntryWithoutLooping: Bool {
-    mpv.getInt(MPVProperty.playlistPos) == mpv.getInt(MPVProperty.playlistCount) - 1
-      && mpv.getString(MPVOption.PlaybackControl.loopPlaylist) == "no"
   }
 
   @discardableResult
@@ -2164,7 +2166,7 @@ class PlayerCore: NSObject {
         // add files in same folder
         if shouldAutoLoadFiles {
           log("Started auto load")
-          try autoLoadFilesInCurrentFolder(ticket: currentTicket, playlistTicket: currentPlaylistTicket)
+          try autoLoadFilesInCurrentFolder(ticket: currentPlaylistTicket)
         }
         // auto load matched subtitles
         if let matchedSubs = self.info.getMatchedSubs(path) {
@@ -2294,8 +2296,6 @@ class PlayerCore: NSObject {
   }
 
   func fileEnded(_ dueToStopCommand: Bool) {
-    // Playback has left the file, stop scanning it for thumbnails.
-    ffmpegController.cancelThumbnailGeneration()
     // if receive end-file when loading file, might be error
     // wait for idle
     if info.state == .loading || info.state == .starting {
@@ -2690,8 +2690,8 @@ class PlayerCore: NSObject {
    This method is expected to be executed in `backgroundQueue` (see `backgroundQueueTicket`).
    Therefore accesses to `self.info` and mpv playlist must be guarded.
    */
-  private func autoLoadFilesInCurrentFolder(ticket: Int, playlistTicket: Int) throws {
-    try AutoFileMatcher(player: self, ticket: ticket, playlistTicket: playlistTicket).startMatching()
+  private func autoLoadFilesInCurrentFolder(ticket: Int) throws {
+    try AutoFileMatcher(player: self, ticket: ticket).startMatching()
   }
 
   /**

@@ -1213,8 +1213,11 @@ class MPVController: NSObject {
     case MPV_EVENT_END_FILE:
       let reason = event.pointee.data.load(as: mpv_end_file_reason.self)
       let dueToStopCommand = reason == MPV_END_FILE_REASON_STOP
-      // When a seek runs past the end of a file mpv restarts playback and then ends the file at
-      // once.
+      // Playback has left the file, stop scanning it for thumbnails. This is done here and not in
+      // PlayerCore.fileEnded so that the scan does not continue until the main thread is free.
+      player.ffmpegController.cancelThumbnailGeneration()
+      // When a seek runs past the end of a file during playback mpv restarts playback and then
+      // ends the file at once.
       let endedByScrollSeek = isScrollSeeking || scrollSeekEndTime.map {
         CACurrentMediaTime() - $0 < maxSeekEndToFileEndInterval
       } ?? false

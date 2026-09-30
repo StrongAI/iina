@@ -16,7 +16,6 @@ class AutoFileMatcher {
 
   weak private var player: PlayerCore!
   var ticket: Int
-  private let playlistTicket: Int
 
   private let fm = FileManager.default
   private let searchOptions: FileManager.DirectoryEnumerationOptions = [.skipsHiddenFiles, .skipsPackageDescendants, .skipsSubdirectoryDescendants]
@@ -34,16 +33,19 @@ class AutoFileMatcher {
     Logger.log(message, level: level, subsystem: subsystem)
   }
 
-  init(player: PlayerCore, ticket: Int, playlistTicket: Int) {
+  /// - Parameter ticket: The value of `PlayerCore.folderPlaylistTicket` when the file whose folder is matched was opened.
+  init(player: PlayerCore, ticket: Int) {
     self.player = player
     self.ticket = ticket
-    self.playlistTicket = playlistTicket
     subsystem = Logger.makeSubsystem("fmatcher\(player.playerNumber)", ["square.stack.3d.up"])
   }
 
-  /// checkTicket
+  /// Stop matching once the playlist of the opened file has been abandoned.
+  ///
+  /// The folder is matched once, for the file that was opened, and its files and subtitles serve every entry in the playlist.
+  /// Matching therefore continues when playback moves to another entry.
   private func checkTicket() throws {
-    try player.checkTicket(ticket)
+    try player.checkFolderPlaylistTicket(ticket)
   }
 
   private var mediaFiles: [FileInfo] {
@@ -126,19 +128,18 @@ class AutoFileMatcher {
     let currentPath = player.info.currentURL?.path
     let currentIndex = files.firstIndex { $0.url.path == currentPath }
 
-    // The files are added whatever entry in the playlist is playing by then, so only the playlist
-    // ticket is checked. The files after the opened file are added first so that the next entry
-    // is available as soon as possible.
+    // The files after the opened file are added first so that the next entry is available as soon
+    // as possible.
     if let currentIndex {
       for video in files[(currentIndex + 1)...] {
-        try player.checkFolderPlaylistTicket(playlistTicket)
+        try checkTicket()
         player.appendToPlaylist(video.path, silent: true)
       }
     }
     // The files before the opened file are inserted ahead of it in order. If the opened file is
     // not among the files found then all of them are.
     for (index, video) in files[..<(currentIndex ?? files.count)].enumerated() {
-      try player.checkFolderPlaylistTicket(playlistTicket)
+      try checkTicket()
       player.mpv.playlistInsert(video.path, index: index)
     }
   }
