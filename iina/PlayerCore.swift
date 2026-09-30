@@ -1642,7 +1642,8 @@ class PlayerCore: NSObject {
   }
 
   /// Play the next or the previous entry in the playlist.
-  /// - Important: This method will ensure playback is paused before changing the position in the playlist. If playback is not
+  /// - Important: This method will ensure playback is paused once `mpv` has accepted the change of position in the playlist,
+  ///     before the entry moved to is loaded. When there is no entry to move to playback is left as it is. If playback is not
   ///     paused, audio can start playing before video is shown. This is most noticeable with high resolution videos encoded with
   ///     newer high compression codecs (such as AV1), when running on older Macs that lack support for hardware decoding of the
   ///     codec used. Playback will be started once the video has been loaded and the size of the video is known (unless the "Pause"
