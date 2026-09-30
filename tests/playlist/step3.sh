@@ -4,7 +4,8 @@
 # The entry stepped to must stay paused.
 source /Users/admin/Projects/iina-test/lib.sh
 L=$MEDIA/long
-quit_iina; open_file $L/long01.mp4; sleep 3
+# The "pause when media is opened" setting is at its default, off, so that the file plays when opened.
+quit_iina; defaults delete com.colliderli.iina pauseWhenOpen 2>/dev/null; open_file $L/long01.mp4; sleep 3
 osascript -e "tell application \"IINA\" to activate" -e "delay 0.5" -e "tell application \"System Events\"
 key code 124 using command down
 delay $1
