@@ -56,6 +56,12 @@
 - (void)generateThumbnailForFile:(nonnull NSString *)file
                       thumbWidth:(int)thumbWidth;
 
+/// Stop generating thumbnails.
+///
+/// Thumbnail generation in progress stops before decoding another frame and does not notify the delegate that thumbnails were
+/// generated.
+- (void)cancelThumbnailGeneration;
+
 /// Read artwork from the file with the given URL.
 ///
 /// This method will open the file and search the streams for one that contains front cover artwork. If found the image data will be read

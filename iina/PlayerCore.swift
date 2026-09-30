@@ -191,6 +191,17 @@ class PlayerCore: NSObject {
    */
   @Atomic var backgroundQueueTicket = 0
 
+  /**
+   This ticket will be increased each time the playlist is abandoned: when another file is opened
+   and when the background task is told to stop.
+
+   The task adding the files in the folder of the opened file to the playlist holds a copy of the
+   ticket value at creation. Unlike `backgroundQueueTicket` this ticket is not increased when
+   playback moves to another entry in the playlist, so that the task continues until every file in
+   the folder has been added.
+   */
+  @Atomic var folderPlaylistTicket = 0
+
   enum TicketExpiredError: Error {
     case ticketExpired
   }
@@ -559,6 +570,7 @@ class PlayerCore: NSObject {
       log("Pausing playback before running load command")
       mpv.setFlag(MPVOption.PlaybackControl.pause, true, level: .verbose)
     }
+    info.pausedForLoading = true
 
 #if USE_ICC_PROFILE_AUTO // See VideoView.setICCProfile.
     // If this mpv core is being reused icc-profile-auto may have been left set to true. This option
@@ -572,6 +584,10 @@ class PlayerCore: NSObject {
     // Delay force-window until an actual file load to avoid Xcode-launched app startup hanging
     // while mpv tries to create a VO before IINA has entered its normal media-open path.
     mpv.setString(MPVOption.Window.forceWindow, "yes", level: .verbose)
+
+    // The load file command replaces the playlist. Stop adding the files in the folder of the file
+    // previously opened to the playlist.
+    $folderPlaylistTicket.withLock { $0 += 1 }
 
     // Send load file command
     info.justOpenedFile = true
@@ -720,6 +736,7 @@ class PlayerCore: NSObject {
   private func stopBackgroundTask() {
     log("Stopping background task")
     $backgroundQueueTicket.withLock { $0 += 1 }
+    $folderPlaylistTicket.withLock { $0 += 1 }
   }
 
   /// Respond to the mpv core shutting down.
@@ -911,6 +928,8 @@ class PlayerCore: NSObject {
   func pause() {
     guard info.state.active else { return }
     log("Pausing playback")
+    // A pause given while a file is loading must not be undone once the file has loaded.
+    info.pausedForLoading = false
     mpv.setFlag(MPVOption.PlaybackControl.pause, true, level: .verbose)
   }
 
@@ -1599,6 +1618,8 @@ class PlayerCore: NSObject {
       log("Pausing playback before playing entry at index \(pos) in the playlist")
       mpv.setFlag(MPVOption.PlaybackControl.pause, true, level: .verbose)
     }
+    info.pausedForLoading = true
+    ffmpegController.cancelThumbnailGeneration()
     mpv.command(.playlistPlayIndex, args: [String(pos)], level: .verbose)
     getPlaylist()
   }
@@ -1622,14 +1643,26 @@ class PlayerCore: NSObject {
 
     if nextMedia == false && (info.playlist.first?.isPlaying) ?? false {
       seek(absoluteSecond: 0)
+    } else if nextMedia && isPlayingLastEntryWithoutLooping {
+      log("Not playing next entry in playlist, the last entry is playing and looping is off")
     } else {
       mainWindow.videoView.displayActive()
       if !mpv.getFlag(MPVOption.PlaybackControl.pause) {
         log("Pausing playback before playing \(nextMedia ? "next" : "previous") entry in playlist")
         mpv.setFlag(MPVOption.PlaybackControl.pause, true, level: .verbose)
       }
+      info.pausedForLoading = true
+      ffmpegController.cancelThumbnailGeneration()
       mpv.command(nextMedia ? .playlistNext : .playlistPrev, checkError: false)
     }
+  }
+
+  /// Whether the last entry in the playlist is playing and the playlist will not loop.
+  ///
+  /// When this is the case there is no next entry for mpv to move to.
+  private var isPlayingLastEntryWithoutLooping: Bool {
+    mpv.getInt(MPVProperty.playlistPos) == mpv.getInt(MPVProperty.playlistCount) - 1
+      && mpv.getString(MPVOption.PlaybackControl.loopPlaylist) == "no"
   }
 
   @discardableResult
@@ -2106,14 +2139,18 @@ class PlayerCore: NSObject {
     // Auto load
     $backgroundQueueTicket.withLock { $0 += 1 }
     let shouldAutoLoadFiles = info.shouldAutoLoadFiles
+    // The files in the folder are loaded once, for the file that was opened. Moving to another
+    // entry in the playlist must not load them again.
+    info.shouldAutoLoadFiles = false
     let currentTicket = backgroundQueueTicket
+    let currentPlaylistTicket = folderPlaylistTicket
     backgroundTaskInUse = true
     backgroundQueue.async { [self] in
       do {
         // add files in same folder
         if shouldAutoLoadFiles {
           log("Started auto load")
-          try autoLoadFilesInCurrentFolder(ticket: currentTicket)
+          try autoLoadFilesInCurrentFolder(ticket: currentTicket, playlistTicket: currentPlaylistTicket)
         }
         // auto load matched subtitles
         if let matchedSubs = self.info.getMatchedSubs(path) {
@@ -2192,10 +2229,9 @@ class PlayerCore: NSObject {
     info.videoRemaining = VideoTime(remaining)
     triedUsingExactSeekForCurrentFile = false
     checkUnsyncedWindowOptions()
-    // generate thumbnails if window has loaded video
-    if mainWindow.isVideoLoaded {
-      generateThumbnails()
-    }
+    // The thumbnails of the previous file must not be shown for this file. Thumbnails for this file
+    // are generated once its video is ready, see notifyWindowVideoSizeChanged.
+    info.thumbnailsReady = false
     // call `trackListChanged` to load tracks and check whether need to switch to music mode
     trackListChanged()
     getPlaylist()
@@ -2244,6 +2280,8 @@ class PlayerCore: NSObject {
   }
 
   func fileEnded(_ dueToStopCommand: Bool) {
+    // Playback has left the file, stop scanning it for thumbnails.
+    ffmpegController.cancelThumbnailGeneration()
     // if receive end-file when loading file, might be error
     // wait for idle
     if info.state == .loading || info.state == .starting {
@@ -2382,6 +2420,11 @@ class PlayerCore: NSObject {
 
   func pauseChanged(_ paused: Bool) {
     guard mainWindow.loaded, info.state.loaded else { return }
+    // mpv delivers property changes only once its event queue is empty, so the change caused by
+    // pausing playback before loading a file can arrive after MPV_EVENT_FILE_LOADED. Until the
+    // video is ready the state must remain loaded, otherwise notifyWindowVideoSizeChanged would
+    // not resume playback.
+    guard info.state != .loaded else { return }
     if (info.state == .paused) != paused {
       sendOSD(paused ? .pause : .resume)
       // The NowPlayingInfoManager is notified when playback is paused or resumed. The video
@@ -2633,8 +2676,8 @@ class PlayerCore: NSObject {
    This method is expected to be executed in `backgroundQueue` (see `backgroundQueueTicket`).
    Therefore accesses to `self.info` and mpv playlist must be guarded.
    */
-  private func autoLoadFilesInCurrentFolder(ticket: Int) throws {
-    try AutoFileMatcher(player: self, ticket: ticket).startMatching()
+  private func autoLoadFilesInCurrentFolder(ticket: Int, playlistTicket: Int) throws {
+    try AutoFileMatcher(player: self, ticket: ticket, playlistTicket: playlistTicket).startMatching()
   }
 
   /**
@@ -2741,6 +2784,8 @@ class PlayerCore: NSObject {
   }
 
   func notifyWindowVideoSizeChanged() {
+    // The main window generates thumbnails itself the first time it loads video.
+    let wasVideoLoaded = mainWindow.isVideoLoaded
     currentController.handleVideoSizeChange()
     if currentController.pendingShow {
       currentController.pendingShow = false
@@ -2750,17 +2795,25 @@ class PlayerCore: NSObject {
     if info.state == .loaded {
       // If the media was loaded manually then playback was paused to avoid audio starting to play
       // before video is ready to be displayed. Now that the video is ready playback can be resumed
-      // unless the IINA "Pause" setting is enabled under "When media is opened".
-      let paused = mpv.getFlag(MPVOption.PlaybackControl.pause)
-      if paused, !Preference.bool(for: .pauseWhenOpen)  {
+      // unless the IINA "Pause" setting is enabled under "When media is opened" or the user paused
+      // playback while the media was loading.
+      var paused = mpv.getFlag(MPVOption.PlaybackControl.pause)
+      if paused, info.pausedForLoading, !Preference.bool(for: .pauseWhenOpen)  {
         log("Resuming playback now that file has been loaded")
         mainWindow.videoView.displayActive()
         mpv.setFlag(MPVOption.PlaybackControl.pause, false, level: .verbose)
+        paused = false
       }
-      info.state = Preference.bool(for: .pauseWhenOpen) ? .paused : .playing
+      info.pausedForLoading = false
+      info.state = paused ? .paused : .playing
       syncUI(.playButton)
       if Preference.bool(for: .fullScreenWhenOpen) && !mainWindow.fsState.isFullscreen && !isInMiniPlayer {
         mainWindow.toggleWindowFullScreen()
+      }
+      // Thumbnails are generated only once playback has started so that scanning the file does
+      // not delay it.
+      if wasVideoLoaded {
+        generateThumbnails()
       }
     }
   }
@@ -3058,6 +3111,12 @@ class PlayerCore: NSObject {
 
   func checkTicket(_ ticket: Int) throws {
     if backgroundQueueTicket != ticket {
+      throw TicketExpiredError.ticketExpired
+    }
+  }
+
+  func checkFolderPlaylistTicket(_ ticket: Int) throws {
+    if folderPlaylistTicket != ticket {
       throw TicketExpiredError.ticketExpired
     }
   }

@@ -164,6 +164,14 @@ class PlayerWindowController: NSWindowController, NSWindowDelegate {
    This property records whether the video is paused initially so we can
    recover the status when scrolling finished. */
   private var wasPlayingBeforeSeeking = false
+
+  /** Whether the video was playing before the current seek by scrolling began. Unlike
+   `wasPlayingBeforeSeeking` this is kept until the momentum that follows the scrolling ends. */
+  private var wasPlayingBeforeScrollSeek = false
+
+  /** The value of `PlaybackInfo.fileStartCount` when the current scroll began. When the value
+   has changed the scroll has carried playback into another file. */
+  private var fileStartCountBeforeScroll = 0
   
   /** Subclasses should set these value to true if the mouse is in some
    special views (e.g. volume slider, play slider) before calling
@@ -479,6 +487,16 @@ class PlayerWindowController: NSWindowController, NSWindowDelegate {
     let isMouse = event.phase.isEmpty
     let isTrackpadBegan = event.phase.contains(.began)
     let isTrackpadEnd = event.phase.contains(.ended)
+    // The momentum events that follow scrolling on a trackpad have an empty phase as well.
+    let isMomentum = !event.momentumPhase.isEmpty
+    let isMomentumEnd = event.momentumPhase.contains(.ended) || event.momentumPhase.contains(.cancelled)
+
+    // A scroll begins when fingers start moving on the trackpad and lasts through the momentum
+    // that follows. An event from a mouse wheel is a scroll of its own.
+    if isTrackpadBegan || (isMouse && !isMomentum) {
+      fileStartCountBeforeScroll = player.info.fileStartCount
+    }
+    let movedToAnotherFile = player.info.fileStartCount != fileStartCountBeforeScroll
 
     // determine direction
 
@@ -514,6 +532,9 @@ class PlayerWindowController: NSWindowController, NSWindowDelegate {
         wasPlayingBeforeSeeking = true
       }
     }
+    if isTrackpadBegan {
+      wasPlayingBeforeScrollSeek = wasPlayingBeforeSeeking
+    }
 
     if isTrackpadEnd && wasPlayingBeforeSeeking {
       // only resume playback when it was playing before seeking
@@ -521,6 +542,14 @@ class PlayerWindowController: NSWindowController, NSWindowDelegate {
         player.resume()
       }
       wasPlayingBeforeSeeking = false
+    }
+
+    // If the momentum carried playback into another file then that file may have been paused by
+    // the "Pause" setting under "When media is opened". Playback was playing before seeking, so
+    // it must be playing once the momentum has ended.
+    if isMomentumEnd && wasPlayingBeforeScrollSeek && movedToAnotherFile
+        && player.mpv.getFlag(MPVOption.PlaybackControl.pause) {
+      player.resume()
     }
 
     // handle the delta value
@@ -543,6 +572,9 @@ class PlayerWindowController: NSWindowController, NSWindowDelegate {
     
     switch scrollAction {
     case .seek:
+      // Once the scroll has carried playback into another file the rest of the scroll, including
+      // its momentum, must not seek in that file.
+      guard !movedToAnotherFile else { break }
       let seekAmount = (isMouse ? AppData.seekAmountMapMouse : AppData.seekAmountMap)[relativeSeekAmount] * delta
       player.seek(relativeSecond: seekAmount, option: useExactSeek)
     case .volume:

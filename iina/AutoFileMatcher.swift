@@ -16,6 +16,7 @@ class AutoFileMatcher {
 
   weak private var player: PlayerCore!
   var ticket: Int
+  private let playlistTicket: Int
 
   private let fm = FileManager.default
   private let searchOptions: FileManager.DirectoryEnumerationOptions = [.skipsHiddenFiles, .skipsPackageDescendants, .skipsSubdirectoryDescendants]
@@ -33,9 +34,10 @@ class AutoFileMatcher {
     Logger.log(message, level: level, subsystem: subsystem)
   }
 
-  init(player: PlayerCore, ticket: Int) {
+  init(player: PlayerCore, ticket: Int, playlistTicket: Int) {
     self.player = player
     self.ticket = ticket
+    self.playlistTicket = playlistTicket
     subsystem = Logger.makeSubsystem("fmatcher\(player.playerNumber)", ["square.stack.3d.up"])
   }
 
@@ -119,32 +121,25 @@ class AutoFileMatcher {
   }
 
   private func addFilesToPlaylist() throws {
-    var addedCurrentVideo = false
-    var needQuit = false
-
     log("Adding files to playlist")
-    // add videos
-    for video in filesGroupedByMediaType[.video]! + filesGroupedByMediaType[.audio]! {
-      // add to playlist
-      if video.url.path == player.info.currentURL?.path {
-        addedCurrentVideo = true
-      } else if addedCurrentVideo {
-        try checkTicket()
+    let files = filesGroupedByMediaType[.video]! + filesGroupedByMediaType[.audio]!
+    let currentPath = player.info.currentURL?.path
+    let currentIndex = files.firstIndex { $0.url.path == currentPath }
+
+    // The files are added whatever entry in the playlist is playing by then, so only the playlist
+    // ticket is checked. The files after the opened file are added first so that the next entry
+    // is available as soon as possible.
+    if let currentIndex {
+      for video in files[(currentIndex + 1)...] {
+        try player.checkFolderPlaylistTicket(playlistTicket)
         player.appendToPlaylist(video.path, silent: true)
-      } else {
-        let count = player.mpv.getInt(MPVProperty.playlistCount)
-        let current = player.mpv.getInt(MPVProperty.playlistPos)
-        try checkTicket()
-        player.appendToPlaylist(video.path, silent: true)
-        player.mpv.command(.playlistMove, args: ["\(count)", "\(current)"], checkError: false,
-                           level: .verbose) { err in
-          if err == MPV_ERROR_COMMAND.rawValue { needQuit = true }
-          if err != 0 {
-            self.log("Error \(err) when adding files to playlist", level: .error)
-          }
-        }
       }
-      if needQuit { break }
+    }
+    // The files before the opened file are inserted ahead of it in order. If the opened file is
+    // not among the files found then all of them are.
+    for (index, video) in files[..<(currentIndex ?? files.count)].enumerated() {
+      try player.checkFolderPlaylistTicket(playlistTicket)
+      player.mpv.playlistInsert(video.path, index: index)
     }
   }
 

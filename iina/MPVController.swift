@@ -1137,6 +1137,7 @@ class MPVController: NSObject {
       DispatchQueue.main.async { self.player.onVideoReconfig() }
 
     case MPV_EVENT_START_FILE:
+      player.info.$fileStartCount.withLock { $0 += 1 }
       guard let path = getString(MPVProperty.path) else { break }
       DispatchQueue.main.async { [self] in
         player.info.state = .starting

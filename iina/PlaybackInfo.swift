@@ -134,6 +134,19 @@ class PlaybackInfo {
   var justStartedFile: Bool = false
   var justOpenedFile: Bool = false
   var shouldAutoLoadFiles: Bool = false
+
+  /// Whether playback is paused for the loading of an entry the user chose to play.
+  ///
+  /// Playback is paused before such an entry is loaded and resumed once its first frame is ready. A pause given by the user in
+  /// between clears this property so that the entry stays paused.
+  var pausedForLoading: Bool = false
+
+  /// The number of files mpv has started.
+  ///
+  /// This is incremented in the mpv event queue when `MPV_EVENT_START_FILE` is received, so the main thread can tell that
+  /// playback has moved to another file before that event has been dispatched to it.
+  @Atomic var fileStartCount = 0
+
   var isMatchingSubtitles = false
   var disableOSDForFileLoading: Bool = false
 
