@@ -36,6 +36,8 @@ fileprivate extension Process {
 }
 
 class JavascriptAPIUtils: JavascriptAPI, JavascriptAPIUtilsExportable {
+  /// Whether to run a system command using bash.
+  private static let useBash = false
   func keychainWrite(_ service: String, _ name: String, _ password: String) -> Any {
     if service.isEmpty {
       return false
@@ -115,8 +117,7 @@ class JavascriptAPIUtils: JavascriptAPI, JavascriptAPIUtilsExportable {
           }
         } else {
           // assume it's a system command
-          let useBash = false
-          if useBash {
+          if JavascriptAPIUtils.useBash {
             path = "/bin/bash"
             args.insert(file, at: 0)
             args = ["-c", args.map {
