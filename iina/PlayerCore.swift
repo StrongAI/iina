@@ -2784,8 +2784,6 @@ class PlayerCore: NSObject {
   }
 
   func notifyWindowVideoSizeChanged() {
-    // The main window generates thumbnails itself the first time it loads video.
-    let wasVideoLoaded = mainWindow.isVideoLoaded
     currentController.handleVideoSizeChange()
     if currentController.pendingShow {
       currentController.pendingShow = false
@@ -2812,7 +2810,7 @@ class PlayerCore: NSObject {
       }
       // Thumbnails are generated only once playback has started so that scanning the file does
       // not delay it.
-      if wasVideoLoaded {
+      if mainWindow.isVideoLoaded {
         generateThumbnails()
       }
     }
