@@ -88,13 +88,13 @@ return -1;\
   NSBlockOperation *op = [[NSBlockOperation alloc] init];
   __weak NSBlockOperation *weakOp = op;
   [op addExecutionBlock:^(){
-    if ([weakOp isCancelled]) {
+    if ([self isScanCancelled:weakOp atCheckpoint:FFThumbnailScanCheckpointStart]) {
       return;
     }
     self->_timestamp = CACurrentMediaTime();
     int success = [self getPeeksForFile:file thumbnailsWidth:thumbWidth operation:weakOp];
     // The thumbnails are incomplete when generation was cancelled
-    if ([weakOp isCancelled]) {
+    if ([self isScanCancelled:weakOp atCheckpoint:FFThumbnailScanCheckpointFinish]) {
       return;
     }
     if (self.delegate) {
@@ -109,6 +109,11 @@ return -1;\
 - (void)cancelThumbnailGeneration
 {
   [_queue cancelAllOperations];
+}
+
+- (BOOL)isScanCancelled:(NSOperation *)operation atCheckpoint:(FFThumbnailScanCheckpoint)checkpoint
+{
+  return operation.isCancelled;
 }
 
 static int interruptCallback(void *opaque)
@@ -140,14 +145,14 @@ static int interruptCallback(void *opaque)
   ret = avformat_open_input(&pFormatCtx, cFilename, NULL, NULL);
   free(cFilename);
   // The context is freed when opening fails.
-  if (ret < 0 && operation.isCancelled) {
+  if (ret < 0 && [self isScanCancelled:operation atCheckpoint:FFThumbnailScanCheckpointOpen]) {
     return -1;
   }
   CHECK_SUCCESS(ret, @"Cannot open video")
 
   // Find stream information
   ret = avformat_find_stream_info(pFormatCtx, NULL);
-  if (operation.isCancelled) {
+  if ([self isScanCancelled:operation atCheckpoint:FFThumbnailScanCheckpointStreamInfo]) {
     avformat_close_input(&pFormatCtx);
     return -1;
   }
@@ -238,7 +243,7 @@ static int interruptCallback(void *opaque)
 
   // For each preview point
   for (i = 0; i <= self.thumbnailCount; i++) {
-    if (operation.isCancelled)
+    if ([self isScanCancelled:operation atCheckpoint:FFThumbnailScanCheckpointSeek])
       break;
 
     int64_t seek_pos = interval * i + pVideoStream->start_time;
@@ -249,7 +254,7 @@ static int interruptCallback(void *opaque)
     // avformat_seek_file(pFormatCtx, videoStream, seek_pos-interval, seek_pos, seek_pos+interval, 0);
     ret = av_seek_frame(pFormatCtx, videoStream, seek_pos, AVSEEK_FLAG_BACKWARD);
     // Seeking fails when interrupted due to cancellation
-    if (operation.isCancelled)
+    if ([self isScanCancelled:operation atCheckpoint:FFThumbnailScanCheckpointSeekEnd])
       break;
     CHECK_SUCCESS(ret, @"Cannot seek")
 
@@ -262,7 +267,7 @@ static int interruptCallback(void *opaque)
         if (packet.stream_index == videoStream) {
 
           // Do not decode another frame once cancelled
-          if (operation.isCancelled)
+          if ([self isScanCancelled:operation atCheckpoint:FFThumbnailScanCheckpointDecode])
             break;
 
           // Decode video frame

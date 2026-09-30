@@ -3069,9 +3069,9 @@ class MainWindowController: PlayerWindowController {
     } else {
       timeLabelYPos = sliderFrame.origin.y + playSlider.frame.height + 5
     }
-    timePreviewView.frame.origin = CGPoint(
-      x: round(sliderFrame.origin.x + sliderFrame.size.width * percentage - timePreviewView.frame.width / 2),
-      y: timeLabelYPos)
+    let timeLabelXPos: CGFloat = sliderFrame.origin.x + sliderFrame.size.width * percentage
+      - timePreviewView.frame.width / 2
+    timePreviewView.frame.origin = CGPoint(x: round(timeLabelXPos), y: timeLabelYPos)
   }
 
 
