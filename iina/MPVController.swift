@@ -87,6 +87,7 @@ struct MPVHookValue {
 class MPVController: NSObject {
   struct UserData {
     static let screenshot: UInt64 = 1000000
+    static let scrollSeek: UInt64 = 1000001
   }
 
   // The mpv_handle
@@ -113,6 +114,22 @@ class MPVController: NSObject {
   var needRecordSeekTime: Bool = false
   var recordedSeekStartTime: CFTimeInterval = 0
   var recordedSeekTimeListener: ((Double) -> Void)?
+
+  /// Whether `mpv` has accepted a seek issued by a scroll and has not started it.
+  /// - Important: This must only be accessed by the thread of the queue for reading `mpv` events.
+  private var isScrollSeekPending = false
+
+  /// Whether the seek `mpv` is performing was issued by a scroll.
+  /// - Important: This must only be accessed by the thread of the queue for reading `mpv` events.
+  private var isScrollSeeking = false
+
+  /// The time at which `mpv` restarted playback after its most recent seek, if that seek was issued by a scroll.
+  /// - Important: This must only be accessed by the thread of the queue for reading `mpv` events.
+  private var scrollSeekEndTime: CFTimeInterval?
+
+  /// The longest time in seconds from `mpv` restarting playback after a seek to the file ending for the seek to have ended the
+  /// file by running past its end.
+  private let maxSeekEndToFileEndInterval: CFTimeInterval = 0.5
 
   @Atomic private var hooks: [UInt64: MPVHookValue] = [:]
   private var hookCounter: UInt64 = 1
@@ -1151,6 +1168,9 @@ class MPVController: NSObject {
       DispatchQueue.main.async { self.player.fileLoaded() }
 
     case MPV_EVENT_SEEK:
+      // The seek mpv has started performs every seek mpv has accepted since it last started one.
+      isScrollSeeking = isScrollSeekPending
+      isScrollSeekPending = false
       DispatchQueue.main.async { [self] in
         player.info.isSeeking = true
         // When playback is paused the display link may be shutdown in order to not waste energy.
@@ -1168,8 +1188,14 @@ class MPVController: NSObject {
       }
 
     case MPV_EVENT_PLAYBACK_RESTART:
+      scrollSeekEndTime = isScrollSeeking ? CACurrentMediaTime() : nil
+      isScrollSeeking = false
       DispatchQueue.main.async { [self] in
         player.info.isSeeking = false
+        if player.info.isLoadingAfterScrollSeek {
+          player.info.isLoadingAfterScrollSeek = false
+          player.info.loadAfterScrollSeekEndTime = ProcessInfo.processInfo.systemUptime
+        }
         // When playback is paused the display link may be shutdown in order to not waste energy.
         // The display link will be restarted while seeking. If playback is paused shut it down
         // again.
@@ -1187,6 +1213,15 @@ class MPVController: NSObject {
     case MPV_EVENT_END_FILE:
       let reason = event.pointee.data.load(as: mpv_end_file_reason.self)
       let dueToStopCommand = reason == MPV_END_FILE_REASON_STOP
+      // When a seek runs past the end of a file mpv restarts playback and then ends the file at
+      // once.
+      let endedByScrollSeek = isScrollSeeking || scrollSeekEndTime.map {
+        CACurrentMediaTime() - $0 < maxSeekEndToFileEndInterval
+      } ?? false
+      // A seek mpv has not started by now is discarded by mpv.
+      isScrollSeekPending = false
+      isScrollSeeking = false
+      scrollSeekEndTime = nil
       // When the IINA "Pause" setting is enabled under "When media is opened" IINA must tell mpv to
       // pause playback ASAP. Events are delivered asynchronously. If the IINA
       // "Play next item automatically" setting is enabled mpv will currently be loading the next
@@ -1196,13 +1231,18 @@ class MPVController: NSObject {
       // loaded. As handling this does not require accessing IINA state not protected by locks and
       // only available to the main thread along with the requirement to pause playback ASAP we will
       // not leave this to the PlayerCore function and handle this now before calling fileEnded.
-      if !dueToStopCommand, Preference.bool(for: .pauseWhenOpen) {
+      // When the file was ended by a seek issued by a scroll playback is left as the scroll has
+      // it, so that the next item plays exactly when playback was playing before the scroll.
+      if !dueToStopCommand, Preference.bool(for: .pauseWhenOpen), !endedByScrollSeek {
         setFlag(MPVOption.PlaybackControl.pause, true, level: .verbose)
         // Normally a log message is emitted before calling mpv, but in this case, due to the race
         // condition, playback must be paused as soon as possible, so logging is done afterward.
         log("Pausing playback because \"pause when media is opened\" is enabled")
       }
-      DispatchQueue.main.async { self.player.fileEnded(dueToStopCommand) }
+      DispatchQueue.main.async { [self] in
+        player.info.isLoadingAfterScrollSeek = endedByScrollSeek
+        player.fileEnded(dueToStopCommand)
+      }
 
     case MPV_EVENT_COMMAND_REPLY:
       let reply = event.pointee.reply_userdata
@@ -1220,6 +1260,9 @@ class MPVController: NSObject {
           break
         }
         DispatchQueue.main.async { self.player.screenshotCallback() }
+      } else if reply == MPVController.UserData.scrollSeek, event.pointee.error >= 0 {
+        // mpv has accepted a seek issued by a scroll. The next seek mpv starts performs it.
+        isScrollSeekPending = true
       }
 
     case MPV_EVENT_QUEUE_OVERFLOW:

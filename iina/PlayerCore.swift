@@ -1019,14 +1019,14 @@ class PlayerCore: NSObject {
     mpv.command(.seek, args: ["\(percent)", seekMode], checkError: false, level: .verbose)
   }
 
-  func seek(relativeSecond: Double, option: Preference.SeekOption) {
+  func seek(relativeSecond: Double, option: Preference.SeekOption, byScrolling: Bool = false) {
     switch option {
 
     case .relative:
-      mpv.command(.seek, args: ["\(relativeSecond)", "relative"], checkError: false, level: .verbose)
+      seek(relativeSecond, mode: "relative", byScrolling: byScrolling, level: .verbose)
 
     case .exact:
-      mpv.command(.seek, args: ["\(relativeSecond)", "relative+exact"], checkError: false)
+      seek(relativeSecond, mode: "relative+exact", byScrolling: byScrolling)
 
     case .auto:
       // for each file , try use exact and record interval first
@@ -1039,8 +1039,22 @@ class PlayerCore: NSObject {
         triedUsingExactSeekForCurrentFile = true
       }
       let seekMode = useExactSeekForCurrentFile ? "relative+exact" : "relative"
-      mpv.command(.seek, args: ["\(relativeSecond)", seekMode], checkError: false)
+      seek(relativeSecond, mode: seekMode, byScrolling: byScrolling)
 
+    }
+  }
+
+  /// Send mpv the command to seek by the given number of seconds.
+  ///
+  /// A seek issued by a scroll is sent asynchronously so that mpv replies to it. `MPVController` receives the reply ahead of
+  /// the seek the command causes, which lets it tell when that seek ends the file by running past its end.
+  private func seek(_ relativeSecond: Double, mode: String, byScrolling: Bool, level: Logger.Level = .debug) {
+    let args = ["\(relativeSecond)", mode]
+    if byScrolling {
+      mpv.asyncCommand(.seek, args: args, checkError: false,
+                       replyUserdata: MPVController.UserData.scrollSeek, level: level)
+    } else {
+      mpv.command(.seek, args: args, checkError: false, level: level)
     }
   }
 
