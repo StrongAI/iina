@@ -1005,6 +1005,13 @@ class PlayerCore: NSObject {
       percent = percent.clamped(to: 0..<100)
     }
     let useExact = forceExact ? true : Preference.bool(for: .useExactSeek)
+    if let fullLength = info.fullLength {
+      // mpv takes a percentage of the shorter duration it reports, see FullLength.
+      let time = FullLength.seekTime(percent: percent, fullLength: fullLength)
+      mpv.command(.seek, args: ["\(time)", useExact ? "absolute+exact" : "absolute"], checkError: false,
+                  level: .verbose)
+      return
+    }
     let seekMode = useExact ? "absolute-percent+exact" : "absolute-percent"
     mpv.command(.seek, args: ["\(percent)", seekMode], checkError: false, level: .verbose)
   }
@@ -2193,6 +2200,7 @@ class PlayerCore: NSObject {
     info.displayWidth = 0
     info.displayHeight = 0
     info.videoDuration = VideoTime(duration)
+    info.fullLength = nil
     if let filename = mpv.getString(MPVProperty.path) {
       info.setCachedVideoDuration(filename, duration)
     }
@@ -2762,6 +2770,30 @@ class PlayerCore: NSObject {
         mainWindow.toggleWindowFullScreen()
       }
       EntryStart.startThumbnails(self)
+      findFullLength()
+    }
+  }
+
+  /// Work out the full length of the file being played when `mpv` opened it from its index, and show it
+  /// in place of the shorter duration `mpv` reports, see `FullLength`.
+  ///
+  /// This is done once playback has started and off the main thread so that it never delays the start of
+  /// playback or a step away. A result for a file that is no longer current is dropped.
+  private func findFullLength() {
+    guard let url = info.currentURL, url.isFileURL else { return }
+    let path = url.path
+    let shown = info.videoDuration?.second
+    DispatchQueue.global(qos: .utility).async { [self] in
+      let length = FFmpegController.fullLength(ofFragmentedFile: path)
+      guard let duration = FullLength.duration(shown: shown, fullLength: length) else { return }
+      DispatchQueue.main.async { [self] in
+        guard info.state.active, info.currentURL?.path == path else { return }
+        log("Full length of the file is \(duration)s, mpv reports \(shown ?? 0)s")
+        info.fullLength = duration
+        info.videoDuration = VideoTime(duration)
+        info.setCachedVideoDuration(path, duration)
+        syncUI(.time)
+      }
     }
   }
 
@@ -2826,9 +2858,16 @@ class PlayerCore: NSObject {
     case .time:
       let isNetworkStream = info.isNetworkResource
       syncPosition()
-      info.videoRemaining?.second = Preference.bool(for: .scaleRemainingTime) ?
-      mpv.getDouble(MPVProperty.playtimeRemainingFull) :
-      mpv.getDouble(MPVProperty.timeRemainingFull)
+      if let fullLength = info.fullLength, let position = info.videoPosition?.second {
+        // mpv's remaining time is based on the shorter duration it reports, see FullLength.
+        info.videoRemaining?.second = FullLength.remaining(
+          fullLength: fullLength, position: position,
+          speed: Preference.bool(for: .scaleRemainingTime) ? info.playSpeed : nil)
+      } else {
+        info.videoRemaining?.second = Preference.bool(for: .scaleRemainingTime) ?
+        mpv.getDouble(MPVProperty.playtimeRemainingFull) :
+        mpv.getDouble(MPVProperty.timeRemainingFull)
+      }
       if isNetworkStream {
         // Update cache info
         info.pausedForCache = mpv.getFlag(MPVProperty.pausedForCache)
