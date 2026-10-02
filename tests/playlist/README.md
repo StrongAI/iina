@@ -10,10 +10,13 @@ and script the app.
 - The build under test is copied to `/Users/admin/Projects/Deployment/IINA/IINA.app`.
 - Test media is in `/Users/admin/Projects/TestMedia-iina`: eight short clips in `review`
   (`clip01.mp4` to `clip08.mp4`) and three long files in `long` (`long01.mp4` to `long03.mp4`).
-  `mkmany.py` builds the 10000-file folder `many` from the clips.
+  `mkmany.py` builds the 10000-file folder `many` from the clips. `frag` holds three fragmented MP4s
+  that end in an `mfra` index (`frag-01m.mp4`, `frag-34m.mp4`, `frag-62m.mp4`), from which
+  `fragstep_media.sh` builds the folders `fragstep.sh` opens.
 - IINA is configured with an mpv IPC socket at `/tmp/iina-mpv.sock` and logging enabled.
-- `gesture.swift`, `scroll.swift` and `tcc.swift` are compiled with `swiftc` into `gesture`,
-  `scroll` and `tcc`. `gesture` posts scroll events and needs the Accessibility permission.
+- `gesture.swift`, `scroll.swift`, `tcc.swift` and `axctl.swift` are compiled with `swiftc` into
+  `gesture`, `scroll`, `tcc` and `axctl`. `gesture` and `axctl` post events and need the
+  Accessibility permission.
 
 ## Cases
 
@@ -27,3 +30,6 @@ and script the app.
 | Thumbnail cancellation | `thumbcancel.sh` |
 | Thumbnail priority, cache delay | `timing3.sh`, judged by `mwu.py` and `phases.py` |
 | Cache configuration | `cacheconf.sh` |
+| Open time independent of file length | `fragstep.sh open`, judged by `fragjudge.py` |
+| Full length never delays a step away | `fragstep.sh away`, judged by `fragjudge.py` |
+| Seek by the play slider within the full length | `seekcheck.sh` |
