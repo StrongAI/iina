@@ -37,3 +37,4 @@ and script the app.
 | Open time independent of file length | `fragstep.sh open`, judged by `fragjudge.py` |
 | Full length never delays a step away | `fragstep.sh away`, judged by `fragjudge.py` |
 | Seek by the play slider within the full length | `seekcheck.sh` |
+| Seek beyond mpv's duration before IINA shows the full length | `seekbefore.sh [runs]` |
