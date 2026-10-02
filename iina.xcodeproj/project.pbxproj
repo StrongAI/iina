@@ -391,6 +391,7 @@
 		E7A15E000000000000000017 /* CacheConfigurationTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = E7A15E000000000000000007 /* CacheConfigurationTests.swift */; };
 		E7A15E000000000000000018 /* ThumbnailScanTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = E7A15E000000000000000008 /* ThumbnailScanTests.swift */; };
 		E7A15E000000000000000019 /* TestVideo.swift in Sources */ = {isa = PBXBuildFile; fileRef = E7A15E000000000000000009 /* TestVideo.swift */; };
+		E7A15E00000000000000001A /* MPVReplyCallbacksTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = E7A15E00000000000000000A /* MPVReplyCallbacksTests.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -1845,6 +1846,7 @@
 		E7A15E000000000000000007 /* CacheConfigurationTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CacheConfigurationTests.swift; sourceTree = "<group>"; };
 		E7A15E000000000000000008 /* ThumbnailScanTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ThumbnailScanTests.swift; sourceTree = "<group>"; };
 		E7A15E000000000000000009 /* TestVideo.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TestVideo.swift; sourceTree = "<group>"; };
+		E7A15E00000000000000000A /* MPVReplyCallbacksTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MPVReplyCallbacksTests.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -2631,6 +2633,7 @@
 				E7A15E000000000000000007 /* CacheConfigurationTests.swift */,
 				E7A15E000000000000000004 /* EntryStartTests.swift */,
 				E7A15E000000000000000005 /* FolderPlaylistTests.swift */,
+				E7A15E00000000000000000A /* MPVReplyCallbacksTests.swift */,
 				E7A15E000000000000000003 /* PlaylistSteppingTests.swift */,
 				E7A15E000000000000000006 /* ScrollSeekTests.swift */,
 				E7A15E000000000000000009 /* TestVideo.swift */,
@@ -3235,6 +3238,7 @@
 				E7A15E000000000000000017 /* CacheConfigurationTests.swift in Sources */,
 				E7A15E000000000000000014 /* EntryStartTests.swift in Sources */,
 				E7A15E000000000000000015 /* FolderPlaylistTests.swift in Sources */,
+				E7A15E00000000000000001A /* MPVReplyCallbacksTests.swift in Sources */,
 				E7A15E000000000000000013 /* PlaylistSteppingTests.swift in Sources */,
 				E7A15E000000000000000016 /* ScrollSeekTests.swift in Sources */,
 				E7A15E000000000000000019 /* TestVideo.swift in Sources */,

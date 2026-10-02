@@ -2756,7 +2756,7 @@ class PlayerCore: NSObject {
     }
     // If the media was loaded manually then playback was paused to avoid audio starting to play
     // before video is ready to be displayed. Now that the video is ready the play state is decided.
-    if EntryStart.decidePlayState(self) {
+    EntryStart.decidePlayState(self) { [self] in
       syncUI(.playButton)
       if Preference.bool(for: .fullScreenWhenOpen) && !mainWindow.fsState.isFullscreen && !isInMiniPlayer {
         mainWindow.toggleWindowFullScreen()
@@ -2988,17 +2988,18 @@ class PlayerCore: NSObject {
   }
 
   func getPlaylist() {
-    info.$playlist.withLock { playlist in
-      playlist.removeAll()
-      let playlistCount = mpv.getInt(MPVProperty.playlistCount)
-      for index in 0..<playlistCount {
-        let playlistItem = MPVPlaylistItem(filename: mpv.getString(MPVProperty.playlistNFilename(index))!,
-                                           isCurrent: mpv.getFlag(MPVProperty.playlistNCurrent(index)),
-                                           isPlaying: mpv.getFlag(MPVProperty.playlistNPlaying(index)),
-                                           title: mpv.getString(MPVProperty.playlistNTitle(index)))
-        playlist.append(playlistItem)
-      }
+    // The playlist is read from mpv before taking the lock, so that a reader of the playlist does not
+    // wait for every entry to be read.
+    var playlist: [MPVPlaylistItem] = []
+    let playlistCount = mpv.getInt(MPVProperty.playlistCount)
+    for index in 0..<playlistCount {
+      let playlistItem = MPVPlaylistItem(filename: mpv.getString(MPVProperty.playlistNFilename(index))!,
+                                         isCurrent: mpv.getFlag(MPVProperty.playlistNCurrent(index)),
+                                         isPlaying: mpv.getFlag(MPVProperty.playlistNPlaying(index)),
+                                         title: mpv.getString(MPVProperty.playlistNTitle(index)))
+      playlist.append(playlistItem)
     }
+    info.$playlist.withLock { $0 = playlist }
   }
 
   func getChapters() {
@@ -3205,11 +3206,14 @@ extension PlayerCore: PlaylistSteppingPlayer, EntryStartPlayer {
     set { info.state = newValue }
   }
 
-  var isMpvPaused: Bool { mpv.getFlag(MPVOption.PlaybackControl.pause) }
-
   var pausedForLoading: Bool {
     get { info.pausedForLoading }
     set { info.pausedForLoading = newValue }
+  }
+
+  var userPauseCount: Int {
+    get { info.userPauseCount }
+    set { info.userPauseCount = newValue }
   }
 
   var isInteractiveModeActive: Bool { mainWindow.interactiveMode.isActive }
@@ -3224,24 +3228,41 @@ extension PlayerCore: PlaylistSteppingPlayer, EntryStartPlayer {
     seek(absoluteSecond: 0)
   }
 
-  func movePlaylistPosition(forward: Bool, reply: @escaping (Int32) -> Void) {
-    mpv.command(forward ? .playlistNext : .playlistPrev, checkError: false, returnValueCallback: reply)
+  func fetchMpvPaused(_ reply: @escaping (Bool) -> Void) {
+    mpv.getFlagAsync(MPVOption.PlaybackControl.pause) { paused in
+      guard let paused else { return }
+      DispatchQueue.main.async { reply(paused) }
+    }
+  }
+
+  func movePlaylistPosition(forward: Bool, whenAccepted: @escaping () -> Void, reply: @escaping (Bool) -> Void) {
+    mpv.asyncCommand(forward ? .playlistNext : .playlistPrev) { returnValue in
+      let accepted = returnValue >= 0
+      if accepted {
+        whenAccepted()
+      }
+      DispatchQueue.main.async { reply(accepted) }
+    }
   }
 
   func playPlaylistEntry(at index: Int) {
-    mpv.command(.playlistPlayIndex, args: [String(index)], level: .verbose)
+    mpv.asyncCommand(.playlistPlayIndex, args: [String(index)], level: .verbose) { [self] returnValue in
+      if returnValue < 0 {
+        log("Cannot play entry at index \(index) in the playlist, mpv error \(returnValue)", level: .error)
+      }
+    }
   }
 
   func refreshPlaylist() {
-    getPlaylist()
+    playlistQueue.async { [self] in getPlaylist() }
   }
 
   func pauseMpv() {
-    mpv.setFlag(MPVOption.PlaybackControl.pause, true, level: .verbose)
+    mpv.setFlagAsync(MPVOption.PlaybackControl.pause, true, level: .verbose)
   }
 
   func resumeMpv() {
-    mpv.setFlag(MPVOption.PlaybackControl.pause, false, level: .verbose)
+    mpv.setFlagAsync(MPVOption.PlaybackControl.pause, false, level: .verbose)
   }
 
   func cancelThumbnailGeneration() {
