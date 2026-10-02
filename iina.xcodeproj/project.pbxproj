@@ -395,6 +395,9 @@
 		E7A15E00000000000000001B /* FullLengthTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = E7A15E00000000000000000B /* FullLengthTests.swift */; };
 		E7A15E00000000000000001C /* MPVAsyncRequestTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = E7A15E00000000000000000C /* MPVAsyncRequestTests.swift */; };
 		E7A15E00000000000000001D /* fragmented.mp4 in Resources */ = {isa = PBXBuildFile; fileRef = E7A15E00000000000000000D /* fragmented.mp4 */; };
+		E7A15E00000000000000001E /* PlayerSteppingTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = E7A15E00000000000000000E /* PlayerSteppingTests.swift */; };
+		E7A15E00000000000000001F /* ObjcUtilsTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = E7A15E00000000000000000F /* ObjcUtilsTests.swift */; };
+		E7A15E000000000000000020 /* PlayerPlaybackTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = E7A15E000000000000000010 /* PlayerPlaybackTests.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -1853,6 +1856,9 @@
 		E7A15E00000000000000000B /* FullLengthTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FullLengthTests.swift; sourceTree = "<group>"; };
 		E7A15E00000000000000000C /* MPVAsyncRequestTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MPVAsyncRequestTests.swift; sourceTree = "<group>"; };
 		E7A15E00000000000000000D /* fragmented.mp4 */ = {isa = PBXFileReference; lastKnownFileType = file; path = fragmented.mp4; sourceTree = "<group>"; };
+		E7A15E00000000000000000E /* PlayerSteppingTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PlayerSteppingTests.swift; sourceTree = "<group>"; };
+		E7A15E00000000000000000F /* ObjcUtilsTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ObjcUtilsTests.swift; sourceTree = "<group>"; };
+		E7A15E000000000000000010 /* PlayerPlaybackTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PlayerPlaybackTests.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -2642,6 +2648,9 @@
 				E7A15E00000000000000000B /* FullLengthTests.swift */,
 				E7A15E00000000000000000C /* MPVAsyncRequestTests.swift */,
 				E7A15E00000000000000000D /* fragmented.mp4 */,
+				E7A15E00000000000000000E /* PlayerSteppingTests.swift */,
+				E7A15E00000000000000000F /* ObjcUtilsTests.swift */,
+				E7A15E000000000000000010 /* PlayerPlaybackTests.swift */,
 				E7A15E00000000000000000A /* MPVReplyCallbacksTests.swift */,
 				E7A15E000000000000000003 /* PlaylistSteppingTests.swift */,
 				E7A15E000000000000000006 /* ScrollSeekTests.swift */,
@@ -3250,6 +3259,9 @@
 				E7A15E000000000000000015 /* FolderPlaylistTests.swift in Sources */,
 				E7A15E00000000000000001B /* FullLengthTests.swift in Sources */,
 				E7A15E00000000000000001C /* MPVAsyncRequestTests.swift in Sources */,
+				E7A15E00000000000000001E /* PlayerSteppingTests.swift in Sources */,
+				E7A15E00000000000000001F /* ObjcUtilsTests.swift in Sources */,
+				E7A15E000000000000000020 /* PlayerPlaybackTests.swift in Sources */,
 				E7A15E00000000000000001A /* MPVReplyCallbacksTests.swift in Sources */,
 				E7A15E000000000000000013 /* PlaylistSteppingTests.swift in Sources */,
 				E7A15E000000000000000016 /* ScrollSeekTests.swift in Sources */,
