@@ -1,12 +1,15 @@
 // usage: axctl <app> list
 //        axctl <app> slide <fraction>
+//        axctl <app> center
 // Lists the buttons and sliders in the windows of the IINA copy at <app>, or clicks the play slider
 // (the widest slider) at <fraction> of its width as a user would and prints the value it then holds.
 // The pointer is first moved over the player window so that the on-screen controls are shown; hidden
 // controls are not in the accessibility tree. Tables, lists and scroll areas are not searched.
+// center prints the center of the player window in screen coordinates as "x y", the point the scroll
+// tests post their events at.
 import AppKit
 let args = CommandLine.arguments
-guard args.count >= 3 else { print("usage: axctl <app> list | slide <fraction>"); exit(2) }
+guard args.count >= 3 else { print("usage: axctl <app> list | slide <fraction> | center"); exit(2) }
 guard let app = NSRunningApplication.runningApplications(withBundleIdentifier: "com.colliderli.iina")
   .first(where: { $0.bundleURL?.path == args[1] }) else { print("not running"); exit(3) }
 let ax = AXUIElementCreateApplication(app.processIdentifier)
@@ -67,6 +70,10 @@ case "slide":
   post(.leftMouseDown, target); usleep(50_000)
   post(.leftMouseUp, target); usleep(300_000)
   print("slider value=\(text(slider, kAXValueAttribute)) max=\(text(slider, kAXMaxValueAttribute))")
+case "center":
+  guard let window = (attr(ax, kAXWindowsAttribute) as? [AXUIElement])?.first else { print("no window"); exit(4) }
+  let wp = point(window), ws = size(window)
+  print(Int(wp.x + ws.width / 2), Int(wp.y + ws.height / 2))
 default:
   print("unknown command"); exit(2)
 }
