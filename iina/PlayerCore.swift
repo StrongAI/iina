@@ -2781,8 +2781,8 @@ class PlayerCore: NSObject {
   /// Work out the full length of the file being played when `mpv` opened it from its index, and show it
   /// in place of the shorter duration `mpv` reports, see `FullLength`.
   ///
-  /// This is done once playback has started and off the main thread so that it never delays the start of
-  /// playback or a step away. A result for a file that is no longer current is dropped.
+  /// This starts once the play state of the file has been decided and runs off the main thread, so neither the
+  /// start of playback nor a step away waits for it. A result for a file that is no longer current is dropped.
   private func findFullLength() {
     guard let url = info.currentURL, url.isFileURL else { return }
     let path = url.path
