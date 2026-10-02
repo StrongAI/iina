@@ -15,7 +15,7 @@ for d in sys.argv[3:]:
         if not m: continue
         ts = t(m.group(1))
         if setting == "cache" and cond is None and "Set option: cache=" in line: cond = "on" if line.strip().endswith("yes") else "off"
-        if "Run command: playlist-next" in line: step = ts; started = resumed = None
+        if "un command: playlist-next" in line: step = ts; started = resumed = None
         elif "[d] File started" in line:
             resumed_since_start = False
             if step is not None and started is None: started = ts
@@ -26,7 +26,7 @@ for d in sys.argv[3:]:
             scans += 1; early += not resumed_since_start
     if setting == "thumbs": cond = "on" if any("Got new thumbnails" in l or "Found thumbnail cache" in l for l in il) else "off"
     ml = open(os.path.join(d, "mpv.log"), errors="replace").read().split("\n")
-    n = max((i for i, l in enumerate(ml) if "Run command: playlist-next" in l), default=None)
+    n = max((i for i, l in enumerate(ml) if "un command: playlist-next" in l), default=None)
     teardown = stuck = None
     if n is not None:
         mt = lambda l: float(re.match(r"\[\s*([\d.]+)\]", l).group(1)) * 1000

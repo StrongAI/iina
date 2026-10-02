@@ -7,7 +7,8 @@ rows = []
 for l in open(sys.argv[1], errors="replace"):
     m = re.match(r"(\d\d:\d\d:\d\d\.\d+) (.*)", l)
     if m: rows.append((t(m.group(1)), m.group(2)))
-steps = [i for i, r in enumerate(rows) if "Run command: playlist-next" in r[1]]
+# The step is sent to mpv synchronously or asynchronously, and logged as "Run command" or "Asynchronously run command".
+steps = [i for i, r in enumerate(rows) if "un command: playlist-next" in r[1]]
 if not steps:
     print("%s no step in the log | NO-STEP" % sys.argv[2]); sys.exit(0)
 a = steps[-1]

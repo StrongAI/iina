@@ -3,7 +3,7 @@
 import sys, re, os, statistics
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 base = "/Users/admin/Library/Logs/com.colliderli.iina/"
-marks = ["Run command: playlist-next", "] Playing: ", "Opening done:", "Starting playback...", "Decoder format:", "first video frame after restart shown", "playback restart complete"]
+marks = ["un command: playlist-next", "] Playing: ", "Opening done:", "Starting playback...", "Decoder format:", "first video frame after restart shown", "playback restart complete"]
 names = ["next->Playing", "Playing->Opening done", "Opening done->Starting playback", "Starting playback->Decoder format", "Decoder format->first frame shown", "first frame shown->restart complete"]
 data = {"on": [], "off": []}
 for l in open(sys.argv[1]):
