@@ -865,7 +865,8 @@ class MPVController: NSObject {
 
   /// Set the given flag property asynchronously, without waiting for `mpv`. This may be called from any thread.
   ///
-  /// `mpv` handles requests in the order they are made, so a request made after this one sees the flag set.
+  /// `mpv` handles asynchronous requests in the order they are made. A synchronous request made later can be handled first, but
+  /// `mpv` handles this one right after it, before it carries on with playback.
   func setFlagAsync(_ name: String, _ flag: Bool, level: Logger.Level = .debug) {
     guard mpv != nil else { return }
     log("Asynchronously set property: \(name)=\(flag)", level: level)

@@ -560,10 +560,11 @@ class PlayerCore: NSObject {
     miniPlayer.pendingShow = true
     initialWindow.close()
 
-    if !mpv.getFlag(MPVOption.PlaybackControl.pause) {
-      log("Pausing playback before running load command")
-      mpv.setFlag(MPVOption.PlaybackControl.pause, true, level: .verbose)
-    }
+    // Neither this pause nor force-window below waits for mpv, so that main never waits for it. Pausing paused
+    // playback changes nothing, so whether playback is paused is not read. mpv can run the load command below
+    // before these requests, but it runs them before it opens the file.
+    log("Pausing playback before running load command")
+    mpv.setFlagAsync(MPVOption.PlaybackControl.pause, true, level: .verbose)
     info.pausedForLoading = true
 
 #if USE_ICC_PROFILE_AUTO // See VideoView.setICCProfile.
@@ -577,7 +578,8 @@ class PlayerCore: NSObject {
 
     // Delay force-window until an actual file load to avoid Xcode-launched app startup hanging
     // while mpv tries to create a VO before IINA has entered its normal media-open path.
-    mpv.setString(MPVOption.Window.forceWindow, "yes", level: .verbose)
+    mpv.asyncCommand(.set, args: [MPVOption.Window.forceWindow, "yes"], checkError: false, replyUserdata: 0,
+                     level: .verbose)
 
     // The load file command replaces the playlist. Stop adding the files in the folder of the file
     // previously opened to the playlist.
@@ -1005,15 +1007,17 @@ class PlayerCore: NSObject {
       percent = percent.clamped(to: 0..<100)
     }
     let useExact = forceExact ? true : Preference.bool(for: .useExactSeek)
+    // The seek is sent without waiting for mpv, so that the slider moving it never holds up the main thread.
     if let fullLength = info.fullLength {
       // mpv takes a percentage of the shorter duration it reports, see FullLength.
       let time = FullLength.seekTime(percent: percent, fullLength: fullLength)
-      mpv.command(.seek, args: ["\(time)", useExact ? "absolute+exact" : "absolute"], checkError: false,
-                  level: .verbose)
+      mpv.asyncCommand(.seek, args: ["\(time)", useExact ? "absolute+exact" : "absolute"], checkError: false,
+                       replyUserdata: 0, level: .verbose)
       return
     }
     let seekMode = useExact ? "absolute-percent+exact" : "absolute-percent"
-    mpv.command(.seek, args: ["\(percent)", seekMode], checkError: false, level: .verbose)
+    mpv.asyncCommand(.seek, args: ["\(percent)", seekMode], checkError: false, replyUserdata: 0,
+                     level: .verbose)
   }
 
   func seek(relativeSecond: Double, option: Preference.SeekOption, byScrolling: Bool = false) {
@@ -2786,13 +2790,23 @@ class PlayerCore: NSObject {
     DispatchQueue.global(qos: .utility).async { [self] in
       let length = FFmpegController.fullLength(ofFragmentedFile: path)
       guard let duration = FullLength.duration(shown: shown, fullLength: length) else { return }
+      // On main because PlaybackInfo is confined to the main thread, see MPVController.queue, and the time
+      // display is AppKit. Nothing here waits for mpv: the remaining time comes from the position the display
+      // already holds.
       DispatchQueue.main.async { [self] in
         guard info.state.active, info.currentURL?.path == path else { return }
         log("Full length of the file is \(duration)s, mpv reports \(shown ?? 0)s")
         info.fullLength = duration
         info.videoDuration = VideoTime(duration)
         info.setCachedVideoDuration(path, duration)
-        syncUI(.time)
+        if let position = info.videoPosition?.second {
+          // mpv's remaining time is based on the shorter duration it reports, see FullLength.
+          info.videoRemaining?.second = FullLength.remaining(
+            fullLength: duration, position: position,
+            speed: Preference.bool(for: .scaleRemainingTime) ? info.playSpeed : nil)
+        }
+        guard mainWindow.loaded else { return }
+        currentController.updatePlayTime(withDuration: true, andProgressBar: true)
       }
     }
   }
