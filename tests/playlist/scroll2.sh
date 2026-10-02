@@ -1,8 +1,8 @@
-source /Users/admin/Projects/iina-test/lib.sh
-cd /Users/admin/Projects/iina-test; R=$MEDIA/review
+source "$(dirname "$0")/lib.sh"
+cd $TESTS; R=$MEDIA/review
 # The gesture is posted at the center of the player window, wherever the window is on the screen.
 at() { ./axctl "$APP" center; }
-cmd() { python3 /Users/admin/Projects/iina-test/cmd.py "$@" >/dev/null 2>&1; }
+cmd() { python3 $TESTS/cmd.py "$@" >/dev/null 2>&1; }
 st() { echo "$(ipc path time-pos pause | sed "s#.*/##" | tr "\n" " ")"; }
 seeks() { L="$(lastlog)"; awk "/File started/{c=0} /un command: seek/{c++} END{print c+0}" "$L"; }
 res() { sleep 1.5; echo "$1: $(st) seeks-after-last-file-start=$(seeks) file-starts=$(grep -c "File started" "$(lastlog)")   [expect $2]"; }
@@ -19,7 +19,7 @@ start() {
   ipc pause | grep -q "pause = $want" || echo "SETUP-FAILED: pause is not $want before the gesture, the next result is invalid"
   D=$(ipc duration | sed "s/.*= //"); cmd set_property time-pos $(python3 -c "print($D - ${3:-2})"); sleep 0.4
 }
-arrow() { osascript -e "tell application \"IINA\" to activate" -e "delay 0.5" -e "tell application \"System Events\" to key code 124"; }
+arrow() { front; keys 124; }
 start on playing;  ./gesture $(at) wheel:-1:3:30;  res W1-wheel-playing-pauseWhenOpen "clip02 pause=False seeks=0"
 start off playing; ./gesture $(at) wheel:-1:15:40; res W2-wheel-burst-playing "clip02 pause=False seeks=0 time-pos<3"
 sleep 1; ./gesture $(at) wheel:-1:1:30; res W4-wheel-again-after-burst "clip02 pause=False seeks=1"

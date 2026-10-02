@@ -1,5 +1,5 @@
-source /Users/admin/Projects/iina-test/lib.sh
-cd /Users/admin/Projects/iina-test; R=$MEDIA/review
+source "$(dirname "$0")/lib.sh"
+cd $TESTS; R=$MEDIA/review
 res() { sleep 1.5; L="$(lastlog)"; n=$(awk "/File started/{c=0} /un command: seek/{c++} END{print c+0}" "$L"); echo "$1: $(ipc path time-pos pause | sed "s#.*/##" | tr "\n" " ") seeks-after-last-file-start=$n file-starts=$(grep -c "File started" "$L")"; }
 # The scroll is posted at the center of the player window, wherever the window is on the screen.
 at() { ./axctl "$APP" center; }

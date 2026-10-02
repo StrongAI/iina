@@ -4,7 +4,7 @@
 import json, os, re, socket, subprocess, sys, time, glob
 folder, opened, app = sys.argv[1], sys.argv[2], sys.argv[3]
 SOCK = "/tmp/iina-mpv.sock"
-CLICK = ["osascript", "-e", "tell application \"System Events\" to tell process \"IINA\" to click menu item \"Next Media\" of menu \"Playback\" of menu bar item \"Playback\" of menu bar 1"]
+CLICK = [os.path.join(os.path.dirname(os.path.abspath(__file__)), "axmenu"), "Playback", "Next Media"]
 
 class IPC:
     def __init__(self):
@@ -44,7 +44,7 @@ time.sleep(2)
 pl = ipc.get("playlist")
 got = [e["filename"].split("/")[-1] for e in pl]
 cur = [i for i, e in enumerate(pl) if e.get("current")]
-log = max(glob.glob("/Users/admin/Library/Logs/com.colliderli.iina/*/iina.log"), key=os.path.getmtime)
+log = max(glob.glob("/Users/asher/Library/Logs/com.colliderli.iina/*/iina.log"), key=os.path.getmtime)
 def t(s):
     h, m, x = s.split(":"); return (int(h) * 3600 + int(m) * 60 + float(x)) * 1000
 first = lastload = None; steps = []; notplaying = 0; loads = 0

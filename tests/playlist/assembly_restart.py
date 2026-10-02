@@ -43,7 +43,7 @@ for _ in range(600):
     time.sleep(0.2)
 time.sleep(2)
 got = [e["filename"].split("/")[-1] for e in ipc.get("playlist")]
-log = max(glob.glob("/Users/admin/Library/Logs/com.colliderli.iina/*/iina.log"), key=os.path.getmtime)
+log = max(glob.glob("/Users/asher/Library/Logs/com.colliderli.iina/*/iina.log"), key=os.path.getmtime)
 def t(s):
     h, m, x = s.split(":"); return (int(h) * 3600 + int(m) * 60 + float(x)) * 1000
 starts = []; first = None; loads = 0

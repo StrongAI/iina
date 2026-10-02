@@ -1,4 +1,4 @@
-source /Users/admin/Projects/iina-test/lib.sh
+source "$(dirname "$0")/lib.sh"
 R=$MEDIA/review
 row() { echo "$1: $(ipc path cache demuxer-max-bytes cache-secs | sed "s#.*/##" | tr "\n" " ")"; }
 for mode in default off; do
