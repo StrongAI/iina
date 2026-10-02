@@ -27,7 +27,7 @@ and script the app.
 | Folder playlist order | `assembly.sh <opened-file>` (precedence) |
 | Folder playlist completeness | `assembly.sh <opened-file>`, `assembly_restart.py` |
 | Scroll boundary and play state | `scroll.sh`, `scroll2.sh` |
-| Thumbnail cancellation | `thumbcancel.sh` |
+| Thumbnail cancellation | `thumbcancel.sh [delay]` |
 | Thumbnail priority, cache delay | `timing3.sh`, judged by `mwu.py` and `phases.py` |
 | Cache configuration | `cacheconf.sh` |
 | Open time independent of file length | `fragstep.sh open`, judged by `fragjudge.py` |
