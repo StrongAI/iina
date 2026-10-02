@@ -1008,16 +1008,8 @@ class PlayerCore: NSObject {
     }
     let useExact = forceExact ? true : Preference.bool(for: .useExactSeek)
     // The seek is sent without waiting for mpv, so that the slider moving it never holds up the main thread.
-    if let fullLength = info.fullLength {
-      // mpv takes a percentage of the shorter duration it reports, see FullLength.
-      let time = FullLength.seekTime(percent: percent, fullLength: fullLength)
-      mpv.asyncCommand(.seek, args: ["\(time)", useExact ? "absolute+exact" : "absolute"], checkError: false,
-                       replyUserdata: 0, level: .verbose)
-      return
-    }
-    let seekMode = useExact ? "absolute-percent+exact" : "absolute-percent"
-    mpv.asyncCommand(.seek, args: ["\(percent)", seekMode], checkError: false, replyUserdata: 0,
-                     level: .verbose)
+    let args = FullLength.seekArguments(percent: percent, fullLength: info.fullLength, exact: useExact)
+    mpv.asyncCommand(.seek, args: args, checkError: false, replyUserdata: 0, level: .verbose)
   }
 
   func seek(relativeSecond: Double, option: Preference.SeekOption, byScrolling: Bool = false) {
@@ -2791,24 +2783,30 @@ class PlayerCore: NSObject {
       let length = FFmpegController.fullLength(ofFragmentedFile: path)
       guard let duration = FullLength.duration(shown: shown, fullLength: length) else { return }
       // On main because PlaybackInfo is confined to the main thread, see MPVController.queue, and the time
-      // display is AppKit. Nothing here waits for mpv: the remaining time comes from the position the display
-      // already holds.
-      DispatchQueue.main.async { [self] in
-        guard info.state.active, info.currentURL?.path == path else { return }
-        log("Full length of the file is \(duration)s, mpv reports \(shown ?? 0)s")
-        info.fullLength = duration
-        info.videoDuration = VideoTime(duration)
-        info.setCachedVideoDuration(path, duration)
-        if let position = info.videoPosition?.second {
-          // mpv's remaining time is based on the shorter duration it reports, see FullLength.
-          info.videoRemaining?.second = FullLength.remaining(
-            fullLength: duration, position: position,
-            speed: Preference.bool(for: .scaleRemainingTime) ? info.playSpeed : nil)
-        }
-        guard mainWindow.loaded else { return }
-        currentController.updatePlayTime(withDuration: true, andProgressBar: true)
-      }
+      // display is AppKit.
+      DispatchQueue.main.async { [self] in showFullLength(duration, shown: shown, ofFileAt: path) }
     }
+  }
+
+  /// Show the full length worked out for the file at the given path, unless another file has become current or playback
+  /// has stopped since.
+  ///
+  /// Nothing here waits for `mpv`: the remaining time comes from the position the display already holds.
+  /// - Important: This must be called on the main thread, to which `PlaybackInfo` is confined, see `MPVController.queue`.
+  func showFullLength(_ duration: Double, shown: Double?, ofFileAt path: String) {
+    guard info.state.active, info.currentURL?.path == path else { return }
+    log("Full length of the file is \(duration)s, mpv reports \(shown ?? 0)s")
+    info.fullLength = duration
+    info.videoDuration = VideoTime(duration)
+    info.setCachedVideoDuration(path, duration)
+    if let position = info.videoPosition?.second {
+      // mpv's remaining time is based on the shorter duration it reports, see FullLength.
+      info.videoRemaining?.second = FullLength.remaining(
+        fullLength: duration, position: position,
+        speed: Preference.bool(for: .scaleRemainingTime) ? info.playSpeed : nil)
+    }
+    guard mainWindow.loaded else { return }
+    currentController.updatePlayTime(withDuration: true, andProgressBar: true)
   }
 
   /// Synchronize the video position cached in the `info.videoPosition` property.

@@ -519,6 +519,18 @@ enum FullLength {
     fullLength * percent.clamped(to: 0..<100) / 100
   }
 
+  /// The arguments of the seek command for a seek to the given percentage of a file.
+  /// - Parameters:
+  ///   - percent: The percentage of the file to seek to.
+  ///   - fullLength: The full length of the file when it was opened from its index, otherwise `nil`.
+  ///   - exact: Whether the seek is exact rather than to a key frame.
+  /// - Returns: While the full length is known, an absolute seek to `seekTime(percent:fullLength:)`, because `mpv` takes a
+  ///     percentage of the shorter duration it reports; otherwise `mpv`'s own seek to the percentage.
+  static func seekArguments(percent: Double, fullLength: Double?, exact: Bool) -> [String] {
+    guard let fullLength else { return ["\(percent)", exact ? "absolute-percent+exact" : "absolute-percent"] }
+    return ["\(seekTime(percent: percent, fullLength: fullLength))", exact ? "absolute+exact" : "absolute"]
+  }
+
   /// The time remaining in a file of the given full length.
   /// - Parameters:
   ///   - fullLength: The full length of the file.
