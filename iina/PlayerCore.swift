@@ -68,7 +68,7 @@ class PlayerCore: NSObject {
   static private var playerCoreCounter = 0
 
   static private func findIdlePlayerCore() -> PlayerCore? {
-    playerCores.first { $0.info.state == .idle && !$0.backgroundTaskInUse && $0.opensFindingFiles == 0 }
+    playerCores.first { $0.info.state == .idle && !$0.backgroundTaskInUse && $0.opensFindingFiles.isEmpty }
   }
 
   static private func createPlayerCore() -> PlayerCore {
@@ -128,6 +128,10 @@ class PlayerCore: NSObject {
 
           if let relevantActivePlayerCore {
             relevantActivePlayerCore.currentController.window?.makeKeyAndOrderFront(nil)
+            continue
+          }
+          // A player whose open of this url is still finding its files stays idle until it shows the url.
+          if playerCores.contains(where: { $0.opensFindingFiles.contains { $0.contains(url) } }) {
             continue
           }
         }
@@ -211,9 +215,9 @@ class PlayerCore: NSObject {
 
   private var backgroundTaskInUse = false
 
-  /// The opens finding their files on the queue for opening files. The player stays idle until they open the files, and is not
-  /// handed out as an idle player in the meantime. Read and written on the main thread.
-  private var opensFindingFiles = 0
+  /// The URLs of each open finding its files on the queue for opening files, in the order the opens were asked. The player stays
+  /// idle until they open the files, and is not handed out as an idle player in the meantime. Read and written on the main thread.
+  private var opensFindingFiles: [[URL]] = []
 
   var initialWindow: InitialWindowController!
 
@@ -460,7 +464,7 @@ class PlayerCore: NSObject {
       completion?(0)
       return
     }
-    opensFindingFiles += 1
+    opensFindingFiles.append(urls)
     openQueue.async { [self] in
       let urls = Utility.resolveURLs(urls)
 
@@ -472,7 +476,7 @@ class PlayerCore: NSObject {
         if isBDFolder(url)
             || Utility.playlistFileExt.contains(url.absoluteString.lowercasedPathExtension) {
           DispatchQueue.main.async { [self] in
-            opensFindingFiles -= 1
+            opensFindingFiles.removeFirst()
             info.shouldAutoLoadFiles = false
             open(url)
             completion?(nil)
@@ -484,7 +488,7 @@ class PlayerCore: NSObject {
       let playableFiles = getPlayableFiles(in: urls)
       // The player and its windows are changed on the main thread.
       DispatchQueue.main.async { [self] in
-        opensFindingFiles -= 1
+        opensFindingFiles.removeFirst()
         let count = playableFiles.count
 
         // check playable files count
