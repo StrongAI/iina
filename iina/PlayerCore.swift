@@ -501,9 +501,10 @@ class PlayerCore: NSObject {
 
         // open the first file
         open(playableFiles[0])
-        // add the remaining to playlist
+        // add the remaining to playlist. Like the load file command open sends, this does not wait for mpv, so mpv adds them after
+        // loading the first file.
         playableFiles[1..<count].forEach { url in
-          mpv.playlistAppend(url.isFileURL ? url.path : url.absoluteString)
+          mpv.playlistAppendAsync(url.isFileURL ? url.path : url.absoluteString)
         }
 
         // refresh playlist
@@ -593,8 +594,8 @@ class PlayerCore: NSObject {
     initialWindow.close()
 
     // Neither this pause nor force-window below waits for mpv, so that main never waits for it. Pausing paused
-    // playback changes nothing, so whether playback is paused is not read. mpv can run the load command below
-    // before these requests, but it runs them before it opens the file.
+    // playback changes nothing, so whether playback is paused is not read. mpv runs these requests before the
+    // load command below, which does not wait for it either.
     log("Pausing playback before running load command")
     mpv.setFlagAsync(MPVOption.PlaybackControl.pause, true, level: .verbose)
     info.pausedForLoading = true
@@ -605,9 +606,8 @@ class PlayerCore: NSObject {
     // to fix this would be to add this option to the mpv reset-on-next-file option. However the
     // user might override IINA and set that option themselves and not include icc-profile-auto.
     // Better to directly reset icc-profile-auto. See issue #5727 for details.
-    // Waits for mpv on the main thread. Moving it off the main thread belongs to the rework of the player's main-thread requests to
-    // mpv as a whole.
-    mpv.setFlag(MPVOption.GPURendererOptions.iccProfileAuto, false)
+    // Does not wait for mpv, which resets it before the load command below.
+    mpv.setFlagAsync(MPVOption.GPURendererOptions.iccProfileAuto, false)
 #endif
 
     // Delay force-window until an actual file load to avoid Xcode-launched app startup hanging
@@ -622,9 +622,9 @@ class PlayerCore: NSObject {
     // Send load file command
     info.justOpenedFile = true
     info.state = .loading
-    // Waits for mpv on the main thread. Moving it off the main thread belongs to the rework of the player's main-thread requests to
-    // mpv as a whole.
-    mpv.command(.loadfile, args: [path], level: .verbose)
+    // Does not wait for mpv, so mpv loads the file after the requests above and before the files openURLs adds to the playlist
+    // after it. A load mpv refuses to take is checked as a waiting command checks it.
+    mpv.asyncCommand(.loadfile, args: [path], replyUserdata: 0, level: .verbose)
 
     if Preference.bool(for: .autoRepeat) {
        let loopMode = Preference.DefaultRepeatMode(rawValue: Preference.integer(for: .defaultRepeatMode))
