@@ -398,6 +398,7 @@
 		E7A15E00000000000000001E /* PlayerSteppingTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = E7A15E00000000000000000E /* PlayerSteppingTests.swift */; };
 		E7A15E00000000000000001F /* ObjcUtilsTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = E7A15E00000000000000000F /* ObjcUtilsTests.swift */; };
 		E7A15E000000000000000020 /* PlayerPlaybackTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = E7A15E000000000000000010 /* PlayerPlaybackTests.swift */; };
+		E7A15E000000000000000022 /* MPVCoreHold.swift in Sources */ = {isa = PBXBuildFile; fileRef = E7A15E000000000000000011 /* MPVCoreHold.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -1859,6 +1860,7 @@
 		E7A15E00000000000000000E /* PlayerSteppingTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PlayerSteppingTests.swift; sourceTree = "<group>"; };
 		E7A15E00000000000000000F /* ObjcUtilsTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ObjcUtilsTests.swift; sourceTree = "<group>"; };
 		E7A15E000000000000000010 /* PlayerPlaybackTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PlayerPlaybackTests.swift; sourceTree = "<group>"; };
+		E7A15E000000000000000011 /* MPVCoreHold.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MPVCoreHold.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -2651,6 +2653,7 @@
 				E7A15E00000000000000000E /* PlayerSteppingTests.swift */,
 				E7A15E00000000000000000F /* ObjcUtilsTests.swift */,
 				E7A15E000000000000000010 /* PlayerPlaybackTests.swift */,
+				E7A15E000000000000000011 /* MPVCoreHold.swift */,
 				E7A15E00000000000000000A /* MPVReplyCallbacksTests.swift */,
 				E7A15E000000000000000003 /* PlaylistSteppingTests.swift */,
 				E7A15E000000000000000006 /* ScrollSeekTests.swift */,
@@ -3262,6 +3265,7 @@
 				E7A15E00000000000000001E /* PlayerSteppingTests.swift in Sources */,
 				E7A15E00000000000000001F /* ObjcUtilsTests.swift in Sources */,
 				E7A15E000000000000000020 /* PlayerPlaybackTests.swift in Sources */,
+				E7A15E000000000000000022 /* MPVCoreHold.swift in Sources */,
 				E7A15E00000000000000001A /* MPVReplyCallbacksTests.swift in Sources */,
 				E7A15E000000000000000013 /* PlaylistSteppingTests.swift in Sources */,
 				E7A15E000000000000000016 /* ScrollSeekTests.swift in Sources */,
