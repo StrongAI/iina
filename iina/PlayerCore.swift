@@ -575,6 +575,8 @@ class PlayerCore: NSObject {
     // to fix this would be to add this option to the mpv reset-on-next-file option. However the
     // user might override IINA and set that option themselves and not include icc-profile-auto.
     // Better to directly reset icc-profile-auto. See issue #5727 for details.
+    // Waits for mpv on the main thread. Moving it off the main thread belongs to the rework of the player's main-thread requests to
+    // mpv as a whole.
     mpv.setFlag(MPVOption.GPURendererOptions.iccProfileAuto, false)
 #endif
 
@@ -2185,6 +2187,8 @@ class PlayerCore: NSObject {
     // See issue #5403.
     mainWindow.forceDraw("file loaded", always: true)
 
+    // The reads below wait for mpv on the main thread at every entry start. Moving them off it belongs to the rework of the
+    // player's main-thread requests to mpv as a whole.
     // Get video size and set the initial window size
     let width = mpv.getInt(MPVProperty.width)
     let height = mpv.getInt(MPVProperty.height)
@@ -2821,6 +2825,8 @@ class PlayerCore: NSObject {
   ///     milliseconds. Due to this behavior of the `time-pos` property, this method checks to see of the end of the video has been
   ///     reached and if so, sets `videoPosition` to match `videoDuration`.
   private func syncPosition() {
+    // Run on the main thread by syncUI(.time) at every tick, where each read below waits for mpv. Moving the time synchronization
+    // off the main thread belongs to the rework of the player's main-thread requests to mpv as a whole.
     if info.isNetworkResource {
       info.videoDuration?.second = mpv.getDouble(MPVProperty.duration)
     }
@@ -3043,6 +3049,8 @@ class PlayerCore: NSObject {
   }
 
   func getPlaylist() {
+    // Called on the main thread, where each read below waits for mpv. Moving it off the main thread belongs to the rework of the
+    // player's main-thread requests to mpv as a whole.
     // The playlist is read from mpv before taking the lock, so that a reader of the playlist does not
     // wait for every entry to be read.
     var playlist: [MPVPlaylistItem] = []
