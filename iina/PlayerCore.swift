@@ -1037,18 +1037,14 @@ class PlayerCore: NSObject {
     }
   }
 
-  /// Send mpv the command to seek by the given number of seconds.
+  /// Send mpv the command to seek by the given number of seconds, asynchronously so that the main thread does not wait for mpv.
   ///
-  /// A seek issued by a scroll is sent asynchronously so that mpv replies to it. `MPVController` receives the reply ahead of
-  /// the seek the command causes, which lets it tell when that seek ends the file by running past its end.
+  /// A seek issued by a scroll carries the scroll-seek userdata. `MPVController` receives mpv's reply to it ahead of the seek the
+  /// command causes, which lets it tell when that seek ends the file by running past its end. Any other seek carries userdata 0,
+  /// which has no reply callback.
   private func seek(_ relativeSecond: Double, mode: String, byScrolling: Bool, level: Logger.Level = .debug) {
-    let args = ["\(relativeSecond)", mode]
-    if byScrolling {
-      mpv.asyncCommand(.seek, args: args, checkError: false,
-                       replyUserdata: MPVController.UserData.scrollSeek, level: level)
-    } else {
-      mpv.command(.seek, args: args, checkError: false, level: level)
-    }
+    mpv.asyncCommand(.seek, args: ["\(relativeSecond)", mode], checkError: false,
+                     replyUserdata: byScrolling ? MPVController.UserData.scrollSeek : 0, level: level)
   }
 
   func seek(absoluteSecond: Double) {
@@ -3275,8 +3271,9 @@ extension PlayerCore: PlaylistSteppingPlayer, EntryStartPlayer {
 
   var isVideoLoaded: Bool { mainWindow.isVideoLoaded }
 
+  /// Seek to the start of the file, sending the command asynchronously so that the main thread does not wait for mpv.
   func seekToStart() {
-    seek(absoluteSecond: 0)
+    mpv.asyncCommand(.seek, args: ["0", "absolute+exact"], replyUserdata: 0)
   }
 
   func fetchMpvPaused(_ reply: @escaping (Bool) -> Void) {
