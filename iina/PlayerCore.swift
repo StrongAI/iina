@@ -2852,18 +2852,90 @@ class PlayerCore: NSObject {
   ///     milliseconds. Due to this behavior of the `time-pos` property, this method checks to see of the end of the video has been
   ///     reached and if so, sets `videoPosition` to match `videoDuration`.
   private func syncPosition() {
-    // Run on the main thread by syncUI(.time) at every tick, where each read below waits for mpv. Moving the time synchronization
-    // off the main thread belongs to the rework of the player's main-thread requests to mpv as a whole.
     if info.isNetworkResource {
       info.videoDuration?.second = mpv.getDouble(MPVProperty.duration)
     }
-    let eofReached = mpv.getFlag(MPVProperty.eofReached)
+    storePosition(eofReached: mpv.getFlag(MPVProperty.eofReached), timePos: mpv.getDouble(MPVProperty.timePos))
+  }
+
+  /// Store the video position given by `eof-reached` and `time-pos`, see `syncPosition`.
+  private func storePosition(eofReached: Bool, timePos: Double) {
     if eofReached, let duration = info.videoDuration?.second {
       info.videoPosition?.second = duration
     } else {
-      info.videoPosition?.second = mpv.getDouble(MPVProperty.timePos)
+      info.videoPosition?.second = timePos
     }
     info.constrainVideoPosition()
+  }
+
+  /// Whether a `syncTime` request awaits `mpv`'s answer. Read and written on the main thread.
+  private var isTimeSyncPending = false
+
+  /// Synchronize the time values of `info` with `mpv` and update the time shown, without waiting for `mpv`.
+  ///
+  /// The values are asked of `mpv` in one asynchronous request and stored on the main thread once it answers, then `completion` is
+  /// called there. A sync without a completion is skipped while an earlier one awaits `mpv`, so that a stalled `mpv` is not asked
+  /// again at every tick.
+  func syncTime(then completion: (() -> Void)? = nil) {
+    // If window is not loaded or stopping or shutting down, ignore.
+    guard mainWindow.loaded, info.state.active else { return }
+    guard completion != nil || !isTimeSyncPending else { return }
+    isTimeSyncPending = true
+    let isNetworkStream = info.isNetworkResource
+    // mpv's remaining time is based on the shorter duration it reports, so it is not read once the full length is known, see
+    // FullLength.
+    let remainingName: String? = info.fullLength != nil ? nil : Preference.bool(for: .scaleRemainingTime) ?
+      MPVProperty.playtimeRemainingFull : MPVProperty.timeRemainingFull
+    var names = [MPVProperty.eofReached, MPVProperty.timePos]
+    if let remainingName {
+      names.append(remainingName)
+    }
+    if isNetworkStream {
+      names += [MPVProperty.duration, MPVProperty.pausedForCache, MPVProperty.demuxerCacheState, MPVProperty.demuxerCacheTime,
+                MPVProperty.cacheBufferingState]
+    }
+    mpv.getNodesAsync(names) { values in
+      let answers = Dictionary(uniqueKeysWithValues: zip(names, values))
+      // On main because PlaybackInfo is confined to the main thread, see MPVController.queue, and the time display is AppKit.
+      DispatchQueue.main.async { [self] in
+        isTimeSyncPending = false
+        guard info.state.active else { return }
+        // A value mpv could not read counts as zero or false, as it did when the values were read waiting for mpv.
+        func number(_ name: String) -> Double {
+          let value = answers[name] ?? nil
+          return value as? Double ?? (value as? Int64).map(Double.init) ?? 0
+        }
+        if isNetworkStream {
+          info.videoDuration?.second = number(MPVProperty.duration)
+        }
+        storePosition(eofReached: (answers[MPVProperty.eofReached] ?? nil) as? Bool ?? false,
+                      timePos: number(MPVProperty.timePos))
+        if let fullLength = info.fullLength, let position = info.videoPosition?.second {
+          info.videoRemaining?.second = FullLength.remaining(
+            fullLength: fullLength, position: position,
+            speed: Preference.bool(for: .scaleRemainingTime) ? info.playSpeed : nil)
+        } else if let remainingName {
+          info.videoRemaining?.second = number(remainingName)
+        }
+        if isNetworkStream {
+          info.pausedForCache = (answers[MPVProperty.pausedForCache] ?? nil) as? Bool ?? false
+          let cacheState = (answers[MPVProperty.demuxerCacheState] ?? nil) as? [String: Any?] ?? [:]
+          info.cacheUsed = Int((cacheState["fw-bytes"] ?? nil) as? Int64 ?? 0)
+          info.cacheSpeed = Int((cacheState["raw-input-rate"] ?? nil) as? Int64 ?? 0)
+          info.cacheTime = Int(number(MPVProperty.demuxerCacheTime))
+          info.bufferingState = Int(number(MPVProperty.cacheBufferingState))
+        }
+        currentController.updatePlayTime(withDuration: isNetworkStream, andProgressBar: true)
+        if !isInMiniPlayer && mainWindow.fsState.isFullscreen && mainWindow.displayTimeAndBatteryInFullScreen
+            && !mainWindow.additionalInfoView.isHidden {
+          mainWindow.additionalInfoView.update()
+        }
+        if isNetworkStream {
+          mainWindow.bufferIndicatorView.updateNetworkState()
+        }
+        completion?()
+      }
+    }
   }
 
   /// Synchronize the cached video position if the timer that updates the cache is not running.
@@ -2903,38 +2975,7 @@ class PlayerCore: NSObject {
     switch option {
 
     case .time:
-      let isNetworkStream = info.isNetworkResource
-      syncPosition()
-      if let fullLength = info.fullLength, let position = info.videoPosition?.second {
-        // mpv's remaining time is based on the shorter duration it reports, see FullLength.
-        info.videoRemaining?.second = FullLength.remaining(
-          fullLength: fullLength, position: position,
-          speed: Preference.bool(for: .scaleRemainingTime) ? info.playSpeed : nil)
-      } else {
-        // A synchronous read from mpv on the main thread at every tick. Moving the time synchronization off the main thread belongs
-        // to the rework of the player's main-thread requests to mpv as a whole.
-        info.videoRemaining?.second = Preference.bool(for: .scaleRemainingTime) ?
-        mpv.getDouble(MPVProperty.playtimeRemainingFull) :
-        mpv.getDouble(MPVProperty.timeRemainingFull)
-      }
-      if isNetworkStream {
-        // Update cache info
-        info.pausedForCache = mpv.getFlag(MPVProperty.pausedForCache)
-        let cacheState = mpv.getNode(MPVProperty.demuxerCacheState) as? [String: Any] ?? [:]
-        info.cacheUsed = Int(cacheState["fw-bytes"] as? Int64 ?? 0)
-        info.cacheSpeed = Int(cacheState["raw-input-rate"] as? Int64 ?? 0)
-        info.cacheTime = mpv.getInt(MPVProperty.demuxerCacheTime)
-        info.bufferingState = mpv.getInt(MPVProperty.cacheBufferingState)
-      }
-      DispatchQueue.main.async { [self] in
-        currentController.updatePlayTime(withDuration: isNetworkStream, andProgressBar: true)
-        if !self.isInMiniPlayer && mainWindow.fsState.isFullscreen && mainWindow.displayTimeAndBatteryInFullScreen && !mainWindow.additionalInfoView.isHidden {
-          self.mainWindow.additionalInfoView.update()
-        }
-        if isNetworkStream {
-          self.mainWindow.bufferIndicatorView.updateNetworkState()
-        }
-      }
+      syncTime()
 
     case .playButton:
       DispatchQueue.main.async { [self] in

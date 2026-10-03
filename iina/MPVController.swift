@@ -1269,11 +1269,13 @@ class MPVController: NSObject {
         if needRecordSeekTime {
           recordedSeekStartTime = CACurrentMediaTime()
         }
-        player.syncUI(.time)
-        let current = player.info.videoPosition?.stringRepresentation ?? Constants.String.videoTimePlaceholder
-        let total = player.info.videoDuration?.stringRepresentation ?? Constants.String.videoTimePlaceholder
-        let percentage = (player.info.videoPosition / player.info.videoDuration) ?? 1
-        player.sendOSD(.seek(current, total, percentage))
+        // The OSD shows the position once mpv has answered the time sync.
+        player.syncTime { [self] in
+          let current = player.info.videoPosition?.stringRepresentation ?? Constants.String.videoTimePlaceholder
+          let total = player.info.videoDuration?.stringRepresentation ?? Constants.String.videoTimePlaceholder
+          let percentage = (player.info.videoPosition / player.info.videoDuration) ?? 1
+          player.sendOSD(.seek(current, total, percentage))
+        }
       }
 
     case MPV_EVENT_PLAYBACK_RESTART:
