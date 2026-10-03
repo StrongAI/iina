@@ -200,26 +200,31 @@ extension PlayerCore {
 
       let urls = paths.map{ URL(fileURLWithPath: $0) }
       // try open files
-      guard let loadedFileCount = useGlobalOpenRouting ? PlayerCore.openURLs(urls) : openURLs(urls) else { return true }
-      if loadedFileCount == 0 {
-        // if no playable files, try add subtitle files
-        var loadedSubtitle = false
-        for url in urls {
-          if !url.hasDirectoryPath && Utility.supportedFileExt[.sub]!.contains(url.pathExtension.lowercased()) {
-            loadExternalSubFile(url)
-            loadedSubtitle = true
+      let opened = { [self] (loadedFileCount: Int?) in
+        guard let loadedFileCount else { return }
+        if loadedFileCount == 0 {
+          // if no playable files, try add subtitle files
+          for url in urls {
+            if !url.hasDirectoryPath && Utility.supportedFileExt[.sub]!.contains(url.pathExtension.lowercased()) {
+              loadExternalSubFile(url)
+            }
           }
+        } else if loadedFileCount == 1 {
+          // loaded one file
+          info.shouldAutoLoadFiles = true
+        } else {
+          // add multiple files to playlist
+          sendOSD(.addToPlaylist(loadedFileCount))
         }
-        return loadedSubtitle
-      } else if loadedFileCount == 1 {
-        // loaded one file
-        info.shouldAutoLoadFiles = true
-        return true
-      } else {
-        // add multiple files to playlist
-        sendOSD(.addToPlaylist(loadedFileCount))
-        return true
       }
+      if useGlobalOpenRouting {
+        PlayerCore.openURLs(urls, completion: opened)
+      } else {
+        openURLs(urls, completion: opened)
+      }
+      // The files are found off the main thread, so whether any of them, or a subtitle file in their place, can be opened is not
+      // known when the drop is answered. The drop is accepted.
+      return true
     } else if types.contains(.nsURL) {
       guard let url = pb.propertyList(forType: .nsURL) as? [String] else { return false }
       openURLString(url[0])

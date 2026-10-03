@@ -68,7 +68,7 @@ class PlayerCore: NSObject {
   static private var playerCoreCounter = 0
 
   static private func findIdlePlayerCore() -> PlayerCore? {
-    playerCores.first { $0.info.state == .idle && !$0.backgroundTaskInUse }
+    playerCores.first { $0.info.state == .idle && !$0.backgroundTaskInUse && $0.opensFindingFiles == 0 }
   }
 
   static private func createPlayerCore() -> PlayerCore {
@@ -89,25 +89,38 @@ class PlayerCore: NSObject {
   /**
    Opens the URLs in the right window or windows, depending on user settings.
 
-   - Returns: `nil` if no further action is needed, like opened a BD Folder; otherwise the
-   count of playable files.
+   The files are found off the main thread, so they are opened after this returns.
+
+   - Parameter completion: Called on the main thread once the files have been opened, with `nil`
+   if no further action is needed, like opened a BD Folder; otherwise the count of playable files.
    */
-  @discardableResult
-  static func openURLs(_ urls: [URL]) -> Int? {
+  static func openURLs(_ urls: [URL], completion: ((Int?) -> Void)? = nil) {
     let openInCurrentWindow = !Preference.bool(for: .alwaysOpenInNewWindow)
     if openInCurrentWindow {
       // open all urls in the active window if any (or, all in one new window)
-      return activeOrNew.openURLs(urls)
+      activeOrNew.openURLs(urls, completion: completion)
     } else if
       urls.count > 1,
       Preference.bool(for: .groupSimultaneousOpensInPlaylist)
     {
       // create new window, open all urls in that window
       // this purposefully ignores `allowDuplicatePlayers`
-      return newPlayerCore.openURLs(urls)
+      newPlayerCore.openURLs(urls, completion: completion)
     } else {
-      // open each url in its own new window. accumulate the return values
-      return urls.reduce(nil) { currentReturnValue, url in
+      // open each url in its own new window. accumulate the open results, which come on the main thread
+      var result: Int? = nil
+      // The opens not yet finished, plus one until every url has been handed out.
+      var unfinished = 1
+      let finish = { (openResult: Int?) in
+        if let openResult {
+          result = (result ?? 0) + openResult
+        }
+        unfinished -= 1
+        if unfinished == 0 {
+          completion?(result)
+        }
+      }
+      for url in urls {
         // skip if url is already open in some player
         if !Preference.bool(for: .allowDuplicatePlayers) {
           let activePlayerCores = playerCores.filter { $0.info.state != .idle }
@@ -115,20 +128,15 @@ class PlayerCore: NSObject {
 
           if let relevantActivePlayerCore {
             relevantActivePlayerCore.currentController.window?.makeKeyAndOrderFront(nil)
-            return currentReturnValue
+            continue
           }
         }
 
-        // open url, combine open result into return value
-        let openResult = newPlayerCore.openURLs([url])
-
-        return
-          if let openResult {
-            (currentReturnValue ?? 0) + openResult
-          } else {
-            currentReturnValue
-          }
+        // open url, combine open result into the result
+        unfinished += 1
+        newPlayerCore.openURLs([url], completion: finish)
       }
+      finish(nil)
     }
   }
 
@@ -178,6 +186,8 @@ class PlayerCore: NSObject {
   let backgroundQueue: DispatchQueue
   let playlistQueue: DispatchQueue
   let thumbnailQueue: DispatchQueue
+  /// A serial queue for finding the files to open, so that successive opens keep the order they were asked in.
+  let openQueue: DispatchQueue
 
   /**
    This ticket will be increased each time before a new task being submitted to `backgroundQueue`.
@@ -200,6 +210,10 @@ class PlayerCore: NSObject {
   }
 
   private var backgroundTaskInUse = false
+
+  /// The opens finding their files on the queue for opening files. The player stays idle until they open the files, and is not
+  /// handed out as an idle player in the meantime. Read and written on the main thread.
+  private var opensFindingFiles = 0
 
   var initialWindow: InitialWindowController!
 
@@ -329,6 +343,7 @@ class PlayerCore: NSObject {
     backgroundQueue = DispatchQueue(label: "IINAPlayerCoreTask\(playerNumber)", qos: .background)
     playlistQueue = DispatchQueue(label: "IINAPlaylistTask\(playerNumber)", qos: .utility)
     thumbnailQueue = DispatchQueue(label: "IINAPlayerCoreThumbnailTask\(playerNumber)", qos: .utility)
+    openQueue = DispatchQueue(label: "IINAPlayerCoreOpenTask\(playerNumber)", qos: .userInitiated)
     super.init()
     ffmpegController.delegate = self
     self.mpv = MPVController(playerCore: self)
@@ -434,61 +449,76 @@ class PlayerCore: NSObject {
    Open a list of urls. If there are more than one urls, add the remaining ones to
    playlist and disable auto loading.
 
-   - Returns: `nil` if no further action is needed, like opened a BD Folder; otherwise the
-   count of playable files.
+   The files are found on the queue for opening files, which reads the filesystem, so they are
+   opened after this returns.
+
+   - Parameter completion: Called on the main thread once the files have been opened, with `nil`
+   if no further action is needed, like opened a BD Folder; otherwise the count of playable files.
    */
-  @discardableResult
-  func openURLs(_ urls: [URL], shouldAutoLoad autoLoad: Bool = true) -> Int? {
-    guard !urls.isEmpty else { return 0 }
-    // resolveURLs here and getPlayableFiles below read the filesystem on the main thread. Moving the opening of files off the main
-    // thread belongs to the rework of the player's main-thread work as a whole.
-    let urls = Utility.resolveURLs(urls)
+  func openURLs(_ urls: [URL], shouldAutoLoad autoLoad: Bool = true, completion: ((Int?) -> Void)? = nil) {
+    guard !urls.isEmpty else {
+      completion?(0)
+      return
+    }
+    opensFindingFiles += 1
+    openQueue.async { [self] in
+      let urls = Utility.resolveURLs(urls)
 
-    // Handle folder URL (to support mpv shuffle, etc), BD folders and m3u / m3u8 files first.
-    // For these cases, mpv will load/build the playlist and notify IINA when it can be retrieved.
-    if urls.count == 1 {
-      let url = urls[0]
+      // Handle folder URL (to support mpv shuffle, etc), BD folders and m3u / m3u8 files first.
+      // For these cases, mpv will load/build the playlist and notify IINA when it can be retrieved.
+      if urls.count == 1 {
+        let url = urls[0]
 
-      if isBDFolder(url)
-          || Utility.playlistFileExt.contains(url.absoluteString.lowercasedPathExtension) {
-        info.shouldAutoLoadFiles = false
-        open(url)
-        return nil
+        if isBDFolder(url)
+            || Utility.playlistFileExt.contains(url.absoluteString.lowercasedPathExtension) {
+          DispatchQueue.main.async { [self] in
+            opensFindingFiles -= 1
+            info.shouldAutoLoadFiles = false
+            open(url)
+            completion?(nil)
+          }
+          return
+        }
+      }
+
+      let playableFiles = getPlayableFiles(in: urls)
+      // The player and its windows are changed on the main thread.
+      DispatchQueue.main.async { [self] in
+        opensFindingFiles -= 1
+        let count = playableFiles.count
+
+        // check playable files count
+        if count == 0 {
+          completion?(0)
+          return
+        }
+
+        if !autoLoad {
+          info.shouldAutoLoadFiles = false
+        } else {
+          info.shouldAutoLoadFiles = (count == 1)
+        }
+
+        // open the first file
+        open(playableFiles[0])
+        // add the remaining to playlist
+        playableFiles[1..<count].forEach { url in
+          mpv.playlistAppend(url.isFileURL ? url.path : url.absoluteString)
+        }
+
+        // refresh playlist
+        postNotification(.iinaPlaylistChanged)
+        // send OSD
+        if count > 1 {
+          sendOSD(.addToPlaylist(count))
+        }
+        completion?(count)
       }
     }
-
-    let playableFiles = getPlayableFiles(in: urls)
-    let count = playableFiles.count
-
-    // check playable files count
-    if count == 0 {
-      return 0
-    }
-
-    if !autoLoad {
-      info.shouldAutoLoadFiles = false
-    } else {
-      info.shouldAutoLoadFiles = (count == 1)
-    }
-
-    // open the first file
-    open(playableFiles[0])
-    // add the remaining to playlist
-    playableFiles[1..<count].forEach { url in
-      mpv.playlistAppend(url.isFileURL ? url.path : url.absoluteString)
-    }
-
-    // refresh playlist
-    postNotification(.iinaPlaylistChanged)
-    // send OSD
-    if count > 1 {
-      sendOSD(.addToPlaylist(count))
-    }
-    return count
   }
 
-  func openURL(_ url: URL, shouldAutoLoad: Bool = true) {
-    openURLs([url], shouldAutoLoad: shouldAutoLoad)
+  func openURL(_ url: URL, shouldAutoLoad: Bool = true, completion: ((Int?) -> Void)? = nil) {
+    openURLs([url], shouldAutoLoad: shouldAutoLoad, completion: completion)
   }
 
   func openURLString(_ str: String) {

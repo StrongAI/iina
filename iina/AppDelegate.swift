@@ -396,8 +396,28 @@ class AppDelegate: NSObject, NSApplicationDelegate, SPUUpdaterDelegate {
         lastPlayerCore = pc
         return pc
       }
+      // The players open their files once they have found them off the main thread, so the mode the command line asks for is
+      // entered once the last player has opened its files.
+      let enterRequestedMode = { [self] in
+        if let pc = lastPlayerCore {
+          if commandLineStatus.enterMusicMode {
+            if commandLineStatus.enterPIP {
+              // PiP is not supported in music mode. Combining these options is not permitted and is
+              // rejected by iina-cli. The IINA executable must have been invoked directly with
+              // arguments.
+              Logger.log("Cannot specify both --music-mode and --pip", level: .error)
+              // Command line usage error.
+              exit(EX_USAGE)
+            }
+            pc.switchToMiniPlayer()
+          } else if commandLineStatus.enterPIP {
+            pc.mainWindow.enterPIP()
+          }
+        }
+      }
       if commandLineStatus.isStdin {
         getNewPlayerCore().openURLString("-")
+        enterRequestedMode()
       } else {
         let validFileURLs: [URL] = commandLineStatus.filenames.compactMap { filename in
           if Regex.url.matches(filename) {
@@ -408,26 +428,17 @@ class AppDelegate: NSObject, NSApplicationDelegate, SPUUpdaterDelegate {
         }
         if commandLineStatus.openSeparateWindows {
           validFileURLs.forEach { url in
-            getNewPlayerCore().openURL(url)
+            let pc = getNewPlayerCore()
+            pc.openURL(url) { _ in
+              if pc === lastPlayerCore {
+                enterRequestedMode()
+              }
+            }
           }
         } else {
-          getNewPlayerCore().openURLs(validFileURLs)
-        }
-      }
-
-      if let pc = lastPlayerCore {
-        if commandLineStatus.enterMusicMode {
-          if commandLineStatus.enterPIP {
-            // PiP is not supported in music mode. Combining these options is not permitted and is
-            // rejected by iina-cli. The IINA executable must have been invoked directly with
-            // arguments.
-            Logger.log("Cannot specify both --music-mode and --pip", level: .error)
-            // Command line usage error.
-            exit(EX_USAGE)
+          getNewPlayerCore().openURLs(validFileURLs) { _ in
+            enterRequestedMode()
           }
-          pc.switchToMiniPlayer()
-        } else if commandLineStatus.enterPIP {
-          pc.mainWindow.enterPIP()
         }
       }
     }
@@ -786,8 +797,10 @@ class AppDelegate: NSObject, NSApplicationDelegate, SPUUpdaterDelegate {
     }
 
     // open pending files
-    if PlayerCore.openURLs(urls) == 0 {
-      Utility.showAlert("nothing_to_open")
+    PlayerCore.openURLs(urls) { count in
+      if count == 0 {
+        Utility.showAlert("nothing_to_open")
+      }
     }
   }
 
@@ -951,8 +964,10 @@ class AppDelegate: NSObject, NSApplicationDelegate, SPUUpdaterDelegate {
           noteNewRecentDocumentURL(url)
         }
       }
-      if PlayerCore.openURLs(panel.urls) == 0 {
-        Utility.showAlert("nothing_to_open")
+      PlayerCore.openURLs(panel.urls) { count in
+        if count == 0 {
+          Utility.showAlert("nothing_to_open")
+        }
       }
     }
   }
