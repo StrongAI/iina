@@ -937,13 +937,19 @@ class PlayerCore: NSObject {
   func resume() {
     log("Resuming playback")
     mainWindow.videoView.displayActive()
-    // The requests below wait for mpv on the main thread. Moving them off it belongs to the rework of the player's main-thread
-    // requests to mpv as a whole.
-    // Restart playback when reached EOF
-    if mpv.getFlag(MPVProperty.eofReached) {
-      seek(absoluteSecond: 0)
+    // Whether playback reached the end is asked without waiting for mpv. Playback restarts from the start when it did, and resumes,
+    // once mpv answers, unless the user paused playback after asking to resume.
+    let userPausesBeforeResume = info.userPauseCount
+    mpv.getFlagAsync(MPVProperty.eofReached) { [self] eofReached in
+      // On main because PlaybackInfo is confined to the main thread, see MPVController.queue.
+      DispatchQueue.main.async { [self] in
+        guard info.userPauseCount == userPausesBeforeResume else { return }
+        if eofReached == true {
+          seek(absoluteSecond: 0)
+        }
+        mpv.setFlagAsync(MPVOption.PlaybackControl.pause, false, level: .verbose)
+      }
     }
-    mpv.setFlag(MPVOption.PlaybackControl.pause, false, level: .verbose)
   }
 
   /// Stop playback and unload the media.
@@ -1055,8 +1061,9 @@ class PlayerCore: NSObject {
                      replyUserdata: byScrolling ? MPVController.UserData.scrollSeek : 0, level: level)
   }
 
+  /// Send mpv the command to seek to the given time, asynchronously so that the main thread does not wait for mpv.
   func seek(absoluteSecond: Double) {
-    mpv.command(.seek, args: ["\(absoluteSecond)", "absolute+exact"])
+    mpv.asyncCommand(.seek, args: ["\(absoluteSecond)", "absolute+exact"], replyUserdata: 0)
   }
 
   func frameStep(backwards: Bool) {
