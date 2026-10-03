@@ -949,6 +949,49 @@ class MPVController: NSObject {
     }
   }
 
+  /// Read the given properties asynchronously as `mpv` nodes, without waiting for `mpv`.
+  ///
+  /// `mpv` handles requests in the order they are made, so the values include every change requested before this request. `reply`
+  /// is called once, with the value of each property in the order of `names`, `nil` for a property `mpv` could not read. It is called
+  /// on the thread of the queue for reading `mpv` events once `mpv` has answered every request, or on the calling thread when no
+  /// request could be made, and not at all if `mpv` shuts down before replying.
+  func getNodesAsync(_ names: [String], reply: @escaping ([Any?]) -> Void) {
+    guard !names.isEmpty else {
+      reply([])
+      return
+    }
+    // A request that could not be made is answered on the calling thread and the others on the thread of the queue for reading
+    // mpv events, so the answers are gathered under a lock.
+    let answers = Atomic(wrappedValue: (values: [Any?](repeating: nil, count: names.count), remaining: names.count))
+    for (index, name) in names.enumerated() {
+      let userdata = replyCallbacks.register { error, data in
+        var value: Any? = nil
+        if error >= 0, let property = data?.assumingMemoryBound(to: mpv_event_property.self).pointee,
+           property.format == MPV_FORMAT_NODE, let node = property.data {
+          value = try? MPVNode.parse(node.assumingMemoryBound(to: mpv_node.self).pointee)
+        }
+        let values: [Any?]? = answers.withLock { answers in
+          answers.values[index] = value
+          answers.remaining -= 1
+          return answers.remaining == 0 ? answers.values : nil
+        }
+        if let values {
+          reply(values)
+        }
+      }
+      let returnValue = mpv == nil ? MPV_ERROR_UNINITIALIZED.rawValue
+        : mpv_get_property_async(mpv, userdata, name, MPV_FORMAT_NODE)
+      if returnValue < 0 {
+        replyCallbacks.take(userdata)?(returnValue, nil)
+      }
+    }
+  }
+
+  /// Read the given property asynchronously as an `mpv` node, without waiting for `mpv`, see `getNodesAsync`.
+  func getNodeAsync(_ name: String, reply: @escaping (Any?) -> Void) {
+    getNodesAsync([name]) { reply($0[0]) }
+  }
+
   func getString(_ name: String) -> String? {
     let cstr = mpv_get_property_string(mpv, name)
     let str: String? = cstr == nil ? nil : String(cString: cstr!)
@@ -1210,7 +1253,10 @@ class MPVController: NSObject {
       }
 
     case MPV_EVENT_FILE_LOADED:
-      DispatchQueue.main.async { self.player.fileLoaded() }
+      // The properties the file starts with are read here, as its path is when it starts, so that the main thread does not wait for
+      // mpv, and before the events that follow are handed to the main thread, whose work relies on what fileLoaded stores.
+      let loadedFile = player.readLoadedFile()
+      DispatchQueue.main.async { self.player.fileLoaded(loadedFile) }
 
     case MPV_EVENT_SEEK:
       scrollSeekAttribution.seekStarted()

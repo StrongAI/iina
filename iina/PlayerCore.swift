@@ -1574,12 +1574,13 @@ class PlayerCore: NSObject {
   }
 
   func addToPlaylist(paths: [String], at index: Int = -1) {
-    getPlaylist()
+    // getPlaylist returns before the playlist is read, so the count before the appends is read from mpv, waiting for it as the
+    // appends below do.
+    let previousCount = mpv.getInt(MPVProperty.playlistCount)
     info.isShuffled = false
     for path in paths {
       mpv.playlistAppend(path)
     }
-    let previousCount = info.$playlist.withLock { $0.count }
     if index <= previousCount && index >= 0 {
       for i in 0..<paths.count {
         playlistMove(previousCount + i, to: index + i)
@@ -2177,13 +2178,41 @@ class PlayerCore: NSObject {
     events.emit(.fileStarted)
   }
 
+  /// The properties of a file `mpv` has just loaded, read when `mpv` reports it loaded, see `readLoadedFile`.
+  struct LoadedFile {
+    let width: Int
+    let height: Int
+    let duration: Double
+    let position: Double
+    let remaining: Double
+    let path: String?
+    let mediaTitle: String?
+  }
+
+  /// Read the properties of the file `mpv` has just loaded.
+  ///
+  /// This waits for `mpv`, so it is called on the queue for reading `mpv` events when `mpv` reports the file loaded, never on the
+  /// main thread.
+  func readLoadedFile() -> LoadedFile {
+    LoadedFile(width: mpv.getInt(MPVProperty.width),
+               height: mpv.getInt(MPVProperty.height),
+               duration: mpv.getDouble(MPVProperty.duration),
+               position: mpv.getDouble(MPVProperty.timePos),
+               remaining: Preference.bool(for: .scaleRemainingTime) ?
+                 mpv.getDouble(MPVProperty.playtimeRemainingFull) :
+                 mpv.getDouble(MPVProperty.timeRemainingFull),
+               path: mpv.getString(MPVProperty.path),
+               mediaTitle: mpv.getString(MPVProperty.mediaTitle))
+  }
+
   /// A [MPV_EVENT_FILE_LOADED](https://mpv.io/manual/stable/#command-interface-mpv-event-file-loaded)
   /// was received.
   ///
   /// This function is called right after the file is loaded. Should load all meta info here.
+  /// - Parameter loadedFile: The properties of the file, read when `mpv` reported it loaded.
   /// - Important: The event may be received after IINA has started to stop and shutdown the core. The event must be ignored if
   ///         the player is no longer active.
-  func fileLoaded() {
+  func fileLoaded(_ loadedFile: LoadedFile) {
     guard info.state.active else { return }
     log("File loaded")
 
@@ -2194,27 +2223,18 @@ class PlayerCore: NSObject {
     // See issue #5403.
     mainWindow.forceDraw("file loaded", always: true)
 
-    // The reads below wait for mpv on the main thread at every entry start. Moving them off it belongs to the rework of the
-    // player's main-thread requests to mpv as a whole.
-    // Get video size and set the initial window size
-    let width = mpv.getInt(MPVProperty.width)
-    let height = mpv.getInt(MPVProperty.height)
-    let duration = mpv.getDouble(MPVProperty.duration)
-    let pos = mpv.getDouble(MPVProperty.timePos)
-    let remaining = Preference.bool(for: .scaleRemainingTime) ?
-      mpv.getDouble(MPVProperty.playtimeRemainingFull) :
-      mpv.getDouble(MPVProperty.timeRemainingFull)
-    info.videoHeight = height
-    info.videoWidth = width
+    // Store the video size, which sets the initial window size
+    info.videoHeight = loadedFile.height
+    info.videoWidth = loadedFile.width
     info.displayWidth = 0
     info.displayHeight = 0
-    info.videoDuration = VideoTime(duration)
+    info.videoDuration = VideoTime(loadedFile.duration)
     info.fullLength = nil
-    if let filename = mpv.getString(MPVProperty.path) {
-      info.setCachedVideoDuration(filename, duration)
+    if let filename = loadedFile.path {
+      info.setCachedVideoDuration(filename, loadedFile.duration)
     }
-    info.videoPosition = VideoTime(pos)
-    info.videoRemaining = VideoTime(remaining)
+    info.videoPosition = VideoTime(loadedFile.position)
+    info.videoRemaining = VideoTime(loadedFile.remaining)
     triedUsingExactSeekForCurrentFile = false
     checkUnsyncedWindowOptions()
     // The thumbnails of the previous file must not be shown for this file. Thumbnails for this file
@@ -2245,7 +2265,7 @@ class PlayerCore: NSObject {
     // add to history
     if let url = info.currentURL {
       let duration = info.videoDuration ?? .zero
-      let mediaTitle = mpv.getString(MPVProperty.mediaTitle)
+      let mediaTitle = loadedFile.mediaTitle
       // Unfortunately the mpv media-title property returns the filename when there isn't a title.
       // Don't store a title unless the media actually has one.
       let titleToUse: String? = {
@@ -3055,21 +3075,32 @@ class PlayerCore: NSObject {
     info.secondSid = mpv.getInt(MPVOption.Subtitles.secondarySid)
   }
 
-  func getPlaylist() {
-    // Called on the main thread, where each read below waits for mpv. Moving it off the main thread belongs to the rework of the
-    // player's main-thread requests to mpv as a whole.
-    // The playlist is read from mpv before taking the lock, so that a reader of the playlist does not
-    // wait for every entry to be read.
-    var playlist: [MPVPlaylistItem] = []
-    let playlistCount = mpv.getInt(MPVProperty.playlistCount)
-    for index in 0..<playlistCount {
-      let playlistItem = MPVPlaylistItem(filename: mpv.getString(MPVProperty.playlistNFilename(index))!,
-                                         isCurrent: mpv.getFlag(MPVProperty.playlistNCurrent(index)),
-                                         isPlaying: mpv.getFlag(MPVProperty.playlistNPlaying(index)),
-                                         title: mpv.getString(MPVProperty.playlistNTitle(index)))
-      playlist.append(playlistItem)
+  /// Rebuild the playlist from `mpv`'s, read in one request without waiting for `mpv`.
+  ///
+  /// `mpv` handles requests in the order they are made, so the playlist read includes every change requested before this call. It
+  /// is stored on the thread of the queue for reading `mpv` events, then `completion` is called on the main thread. When `mpv` could
+  /// not read its playlist the stored playlist is left as it was.
+  /// - Parameter completion: Called on the main thread once the playlist read has been stored.
+  func getPlaylist(then completion: (() -> Void)? = nil) {
+    mpv.getNodeAsync(MPVProperty.playlist) { [self] node in
+      if let entries = node as? [Any?] {
+        // The current and playing fields of an entry are present only when they are true.
+        let playlist: [MPVPlaylistItem] = entries.compactMap { entry in
+          guard let fields = entry as? [String: Any?],
+                let filename = (fields["filename"] ?? nil) as? String else { return nil }
+          return MPVPlaylistItem(filename: filename,
+                                 isCurrent: (fields["current"] ?? nil) as? Bool ?? false,
+                                 isPlaying: (fields["playing"] ?? nil) as? Bool ?? false,
+                                 title: (fields["title"] ?? nil) as? String)
+        }
+        info.$playlist.withLock { $0 = playlist }
+      } else {
+        log("Cannot read the playlist from mpv", level: .error)
+      }
+      if let completion {
+        DispatchQueue.main.async(execute: completion)
+      }
     }
-    info.$playlist.withLock { $0 = playlist }
   }
 
   func getChapters() {
@@ -3325,7 +3356,7 @@ extension PlayerCore: PlaylistSteppingPlayer, EntryStartPlayer {
   }
 
   func refreshPlaylist() {
-    playlistQueue.async { [self] in getPlaylist() }
+    getPlaylist()
   }
 
   func pauseMpv() {

@@ -170,8 +170,7 @@ class SidebarPlaylistPane: NSView, SidebarPane {
 
   private func updateTable() {
     guard player.info.state.active else { return }
-    player.getPlaylist()
-    tableView.reloadData()
+    player.getPlaylist { [weak self] in self?.tableView.reloadData() }
   }
 
   func updateLoopBtnStatus() {
