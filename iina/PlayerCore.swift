@@ -440,6 +440,8 @@ class PlayerCore: NSObject {
   @discardableResult
   func openURLs(_ urls: [URL], shouldAutoLoad autoLoad: Bool = true) -> Int? {
     guard !urls.isEmpty else { return 0 }
+    // resolveURLs here and getPlayableFiles below read the filesystem on the main thread. Moving the opening of files off the main
+    // thread belongs to the rework of the player's main-thread work as a whole.
     let urls = Utility.resolveURLs(urls)
 
     // Handle folder URL (to support mpv shuffle, etc), BD folders and m3u / m3u8 files first.
@@ -588,6 +590,8 @@ class PlayerCore: NSObject {
     // Send load file command
     info.justOpenedFile = true
     info.state = .loading
+    // Waits for mpv on the main thread. Moving it off the main thread belongs to the rework of the player's main-thread requests to
+    // mpv as a whole.
     mpv.command(.loadfile, args: [path], level: .verbose)
 
     if Preference.bool(for: .autoRepeat) {
@@ -931,6 +935,8 @@ class PlayerCore: NSObject {
   func resume() {
     log("Resuming playback")
     mainWindow.videoView.displayActive()
+    // The requests below wait for mpv on the main thread. Moving them off it belongs to the rework of the player's main-thread
+    // requests to mpv as a whole.
     // Restart playback when reached EOF
     if mpv.getFlag(MPVProperty.eofReached) {
       seek(absoluteSecond: 0)
@@ -2872,6 +2878,8 @@ class PlayerCore: NSObject {
           fullLength: fullLength, position: position,
           speed: Preference.bool(for: .scaleRemainingTime) ? info.playSpeed : nil)
       } else {
+        // A synchronous read from mpv on the main thread at every tick. Moving the time synchronization off the main thread belongs
+        // to the rework of the player's main-thread requests to mpv as a whole.
         info.videoRemaining?.second = Preference.bool(for: .scaleRemainingTime) ?
         mpv.getDouble(MPVProperty.playtimeRemainingFull) :
         mpv.getDouble(MPVProperty.timeRemainingFull)
