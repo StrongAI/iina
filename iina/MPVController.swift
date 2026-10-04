@@ -1408,10 +1408,13 @@ class MPVController: NSObject {
       DispatchQueue.main.async { self.player.vidChanged() }
 
     case MPVOption.TrackSelection.aid:
-      DispatchQueue.main.async { self.player.aidChanged() }
+      // The track id mpv reports, 0 when it reports none, as a read of the property would give.
+      let aid = UnsafePointer<Int>(OpaquePointer(property.data))?.pointee ?? 0
+      DispatchQueue.main.async { self.player.aidChanged(aid) }
 
     case MPVOption.TrackSelection.sid:
-      DispatchQueue.main.async { self.player.sidChanged() }
+      let sid = UnsafePointer<Int>(OpaquePointer(property.data))?.pointee ?? 0
+      DispatchQueue.main.async { self.player.sidChanged(sid) }
 
     case MPVOption.Subtitles.secondarySid:
       DispatchQueue.main.async { self.player.secondarySidChanged() }
@@ -1424,7 +1427,9 @@ class MPVController: NSObject {
       DispatchQueue.main.async { self.player.pauseChanged(paused) }
 
     case MPVProperty.chapter:
-      DispatchQueue.main.async { self.player.chapterChanged() }
+      // The chapter mpv reports, 0 when it reports none, as a read of the property would give.
+      let chapter = UnsafePointer<Int>(OpaquePointer(property.data))?.pointee ?? 0
+      DispatchQueue.main.async { self.player.chapterChanged(chapter) }
 
     case MPVOption.PlaybackControl.speed:
       guard let speed = UnsafePointer<Double>(OpaquePointer(property.data))?.pointee else {
@@ -1642,7 +1647,9 @@ class MPVController: NSObject {
       DispatchQueue.main.async { self.player.fullscreenChanged() }
 
     case MPVOption.Window.ontop:
-      DispatchQueue.main.async { self.player.ontopChanged() }
+      // The on-top flag mpv reports, false when it reports none, as a read of the property would give.
+      let ontop = UnsafePointer<Bool>(OpaquePointer(property.data))?.pointee ?? false
+      DispatchQueue.main.async { self.player.ontopChanged(ontop) }
 
     case MPVOption.Window.windowScale:
       DispatchQueue.main.async { self.player.windowScaleChanged() }

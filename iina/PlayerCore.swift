@@ -2362,9 +2362,10 @@ class PlayerCore: NSObject {
     postNotification(.iinaAFChanged)
   }
 
-  func aidChanged() {
+  /// The mpv `aid` property changed to the given track id, as mpv reported it in the change.
+  func aidChanged(_ aid: Int) {
     guard info.state.active else { return }
-    info.aid = Int(mpv.getInt(MPVOption.TrackSelection.aid))
+    info.aid = aid
     guard mainWindow.loaded else { return }
     mainWindow?.muteButton.isHidden = (info.aid == 0)
     mainWindow?.volumeSlider.isHidden = (info.aid == 0)
@@ -2391,9 +2392,10 @@ class PlayerCore: NSObject {
     setAudioDevice("auto")
   }
 
-  func chapterChanged() {
+  /// The mpv `chapter` property changed to the given chapter, as mpv reported it in the change.
+  func chapterChanged(_ chapter: Int) {
     guard info.state.active else { return }
-    info.chapter = Int(mpv.getInt(MPVProperty.chapter))
+    info.chapter = chapter
     syncUI(.time)
     postNotification(.iinaChapterListChanged)
     postNotification(.iinaMediaTitleChanged)
@@ -2473,9 +2475,9 @@ class PlayerCore: NSObject {
     postNotification(.iinaMediaTitleChanged)
   }
 
-  func ontopChanged() {
+  /// The mpv `ontop` property changed to the given flag, as mpv reported it in the change.
+  func ontopChanged(_ ontop: Bool) {
     guard mainWindow.loaded, info.state.active else { return }
-    let ontop = mpv.getFlag(MPVOption.Window.ontop)
     if ontop != mainWindow.isOntop {
       mainWindow.setWindowFloatingOnTop(ontop)
     }
@@ -2576,9 +2578,10 @@ class PlayerCore: NSObject {
     }
   }
 
-  func sidChanged() {
+  /// The mpv `sid` property changed to the given track id, as mpv reported it in the change.
+  func sidChanged(_ sid: Int) {
     guard info.state.active else { return }
-    info.sid = Int(mpv.getInt(MPVOption.TrackSelection.sid))
+    info.sid = sid
     postNotification(.iinaSIDChanged)
     sendOSD(.track(info.currentTrack(.sub) ?? .noneSubTrack))
     if isInMiniPlayer {

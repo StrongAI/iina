@@ -20,7 +20,8 @@ class PlayerWindowController: NSWindowController, NSWindowDelegate {
   
   var isOntop = false {
     didSet {
-      player.mpv.setFlag(MPVOption.Window.ontop, isOntop)
+      // Without waiting for mpv, which reports the change back to PlayerCore.ontopChanged.
+      player.mpv.setFlagAsync(MPVOption.Window.ontop, isOntop)
     }
   }
   var loaded = false
