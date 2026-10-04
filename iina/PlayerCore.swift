@@ -2235,6 +2235,8 @@ class PlayerCore: NSObject {
     let chapters: [MPVChapter]
     let abLoopA: Double
     let abLoopB: Double
+    let fullscreen: Bool
+    let ontop: Bool
   }
 
   /// Read the properties of the file `mpv` has just loaded.
@@ -2255,7 +2257,9 @@ class PlayerCore: NSObject {
                selectedTracks: readSelectedTracks(),
                chapters: readChapters(),
                abLoopA: abLoopA,
-               abLoopB: abLoopB)
+               abLoopB: abLoopB,
+               fullscreen: mpv.getFlag(MPVOption.Window.fullscreen),
+               ontop: mpv.getFlag(MPVOption.Window.ontop))
   }
 
   /// A [MPV_EVENT_FILE_LOADED](https://mpv.io/manual/stable/#command-interface-mpv-event-file-loaded)
@@ -2289,7 +2293,7 @@ class PlayerCore: NSObject {
     info.videoPosition = VideoTime(loadedFile.position)
     info.videoRemaining = VideoTime(loadedFile.remaining)
     triedUsingExactSeekForCurrentFile = false
-    checkUnsyncedWindowOptions()
+    checkUnsyncedWindowOptions(fullscreen: loadedFile.fullscreen, ontop: loadedFile.ontop)
     // The thumbnails of the previous file must not be shown for this file. Thumbnails for this file
     // are generated once its video is ready, see notifyWindowVideoSizeChanged.
     info.thumbnailsReady = false
@@ -2737,19 +2741,18 @@ class PlayerCore: NSObject {
   /**
    Checks unsynchronized window options, such as those set via mpv before window loaded.
 
-   These options currently include fullscreen and ontop.
+   These options currently include fullscreen and ontop. Their values are those mpv held when it reported the file loaded, read
+   with the rest of the loaded file on the queue for reading mpv events.
    */
-  private func checkUnsyncedWindowOptions() {
+  private func checkUnsyncedWindowOptions(fullscreen fs: Bool, ontop: Bool) {
     guard mainWindow.loaded else { return }
 
-    let fs = mpv.getFlag(MPVOption.Window.fullscreen)
     if fs != mainWindow.fsState.isFullscreen {
       DispatchQueue.main.async {
         self.mainWindow.toggleWindowFullScreen()
       }
     }
 
-    let ontop = mpv.getFlag(MPVOption.Window.ontop)
     if ontop != mainWindow.isOntop {
       DispatchQueue.main.async {
         self.mainWindow.setWindowFloatingOnTop(ontop, updateOnTopStatus: false)
