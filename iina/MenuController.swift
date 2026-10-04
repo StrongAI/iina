@@ -471,16 +471,22 @@ class MenuController: NSObject, NSMenuDelegate {
         $0 == ":" ? ":" : "0"
       }).reversed())
     }
-    player.syncPositionIfNeeded()
+    var menuItems: [NSMenuItem] = []
     for (index, chapter) in chapters.enumerated() {
       let menuTitle = "\(padder(chapter.time.stringRepresentation)) – \(chapter.title)"
-      let nextChapterTime = chapters[at: index+1]?.time ?? Constants.Time.infinite
-      let isPlaying = info.videoPosition?.between(chapter.time, nextChapterTime) ?? false
       let menuItem = NSMenuItem(title: menuTitle, action: #selector(MainMenuActionHandler.menuChapterSwitch(_:)), keyEquivalent: "")
       menuItem.tag = index
-      menuItem.state = isPlaying ? .on : .off
       menuItem.attributedTitle = NSAttributedString(string: menuTitle, attributes: [.font: NSFont.monospacedDigitSystemFont(ofSize: 0, weight: .regular)])
       chapterMenu.addItem(menuItem)
+      menuItems.append(menuItem)
+    }
+    // The menu is built at once, and the chapter playing is checked once the cached video position is up to date.
+    player.syncPositionIfNeeded {
+      for (index, chapter) in chapters.enumerated() {
+        let nextChapterTime = chapters[at: index+1]?.time ?? Constants.Time.infinite
+        let isPlaying = info.videoPosition?.between(chapter.time, nextChapterTime) ?? false
+        menuItems[index].state = isPlaying ? .on : .off
+      }
     }
   }
 

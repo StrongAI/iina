@@ -339,10 +339,13 @@ class PlayerWindowController: NSWindowController, NSWindowDelegate {
   }
 
   func syncSlider() {
-    let a = player.abLoopA
+    syncSlider(abLoopA: player.abLoopA, abLoopB: player.abLoopB)
+  }
+
+  /// Show the A-B loop knobs of the play slider at the given loop points, read from `mpv`.
+  func syncSlider(abLoopA a: Double, abLoopB b: Double) {
     playSlider.abLoopA.isHidden = a == 0
     playSlider.abLoopA.doubleValue = secondsToPercent(a)
-    let b = player.abLoopB
     playSlider.abLoopB.isHidden = b == 0
     playSlider.abLoopB.doubleValue = secondsToPercent(b)
     playSlider.needsDisplay = true

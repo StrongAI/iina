@@ -87,12 +87,21 @@ class NowPlayingInfoManager {
   /// Update the information shown by macOS in the
   /// [Control Center](https://support.apple.com/guide/mac-help/quickly-change-settings-mchl50f94f8f/mac)
   /// Now Playing module.
+  ///
+  /// The information is updated once the cached position of the player is up to date, which is read without waiting for `mpv`.
   /// - Important: This method **must** be run on the main thread because it references `PlayerCore.lastActive`.
   func updateInfo(withTitle: Bool = false) {
     guard RemoteCommandController.useSystemMediaControl else { return }
 
-    let center = MPNowPlayingInfoCenter.default()
     let player = PlayerCore.lastActive
+    player.syncPositionIfNeeded { [self] in
+      updateInfo(of: player, withTitle: withTitle)
+    }
+  }
+
+  /// Update the information shown by macOS in the Now Playing module from the given player, whose cached position is up to date.
+  private func updateInfo(of player: PlayerCore, withTitle: Bool) {
+    let center = MPNowPlayingInfoCenter.default()
     guard player.info.state.active else {
       if isActive {
         RemoteCommandController.shared.disable()
@@ -166,7 +175,6 @@ class NowPlayingInfoManager {
       info[MPNowPlayingInfoPropertyChapterNumber] = player.info.chapter
     }
 
-    player.syncPositionIfNeeded()
     let duration = player.info.videoDuration?.second ?? 0
     let time = player.info.videoPosition?.second ?? 0
 

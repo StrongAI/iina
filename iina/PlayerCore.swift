@@ -631,9 +631,12 @@ class PlayerCore: NSObject {
     mpv.asyncCommand(.loadfile, args: [path], replyUserdata: 0, level: .verbose)
 
     if Preference.bool(for: .autoRepeat) {
-       let loopMode = Preference.DefaultRepeatMode(rawValue: Preference.integer(for: .defaultRepeatMode))
-       setLoopMode(loopMode == .file ? .file : .playlist)
-     }
+      let loopMode = Preference.DefaultRepeatMode(rawValue: Preference.integer(for: .defaultRepeatMode))
+      // Like the load file command, these do not wait for mpv, which sets them after it.
+      for (name, value) in loopOptions(loopMode == .file ? .file : .playlist) {
+        mpv.setStringAsync(name, value)
+      }
+    }
   }
 
   static func loadKeyBindings() {
@@ -1270,8 +1273,11 @@ class PlayerCore: NSObject {
   /// Synchronize IINA with the state of the [mpv](https://mpv.io/manual/stable/) A-B loop command.
   func syncAbLoop() {
     // Obtain the values of the ab-loop-a and ab-loop-b options representing the A & B loop points.
-    let a = abLoopA
-    let b = abLoopB
+    storeAbLoop(a: abLoopA, b: abLoopB)
+  }
+
+  /// Store the A-B loop status the given loop points, read from `mpv`, represent and show them on the play slider.
+  private func storeAbLoop(a: Double, b: Double) {
     if a == 0 {
       if b == 0 {
         // Neither point is set, the feature is disabled.
@@ -1292,7 +1298,7 @@ class PlayerCore: NSObject {
     // If window is not loaded the play slider knobs can't be synchronized.
     guard mainWindow.loaded, info.state.active else { return }
     // The play slider has knobs representing the loop points, make insure the slider is in sync.
-    mainWindow.syncSlider()
+    mainWindow.syncSlider(abLoopA: a, abLoopB: b)
   }
 
   func togglePlaylistLoop() {
@@ -1328,15 +1334,20 @@ class PlayerCore: NSObject {
   }
 
   func setLoopMode(_ newMode: LoopMode) {
-    switch newMode {
+    for (name, value) in loopOptions(newMode) {
+      mpv.setString(name, value)
+    }
+  }
+
+  /// The values of the `mpv` options that set the given loop mode, in the order they are set.
+  private func loopOptions(_ mode: LoopMode) -> [(name: String, value: String)] {
+    switch mode {
     case .playlist:
-      mpv.setString(MPVOption.PlaybackControl.loopPlaylist, "inf")
-      mpv.setString(MPVOption.PlaybackControl.loopFile, "no")
+      return [(MPVOption.PlaybackControl.loopPlaylist, "inf"), (MPVOption.PlaybackControl.loopFile, "no")]
     case .file:
-      mpv.setString(MPVOption.PlaybackControl.loopFile, "inf")
+      return [(MPVOption.PlaybackControl.loopFile, "inf")]
     case .off:
-      mpv.setString(MPVOption.PlaybackControl.loopPlaylist, "no")
-      mpv.setString(MPVOption.PlaybackControl.loopFile, "no")
+      return [(MPVOption.PlaybackControl.loopPlaylist, "no"), (MPVOption.PlaybackControl.loopFile, "no")]
     }
   }
 
@@ -1608,16 +1619,14 @@ class PlayerCore: NSObject {
   }
 
   func addToPlaylist(paths: [String], at index: Int = -1) {
-    // getPlaylist returns before the playlist is read, so the count before the appends is read from mpv, waiting for it as the
-    // appends below do.
-    let previousCount = mpv.getInt(MPVProperty.playlistCount)
     info.isShuffled = false
-    for path in paths {
-      mpv.playlistAppend(path)
-    }
-    if index <= previousCount && index >= 0 {
-      for i in 0..<paths.count {
-        playlistMove(previousCount + i, to: index + i)
+    // These do not wait for mpv, which adds the files in the order they are asked, after the requests made before. mpv appends a
+    // file inserted at an index past the end of its playlist, so the length of the playlist is not needed.
+    for (offset, path) in paths.enumerated() {
+      if index >= 0 {
+        mpv.playlistInsertAsync(path, index: index + offset)
+      } else {
+        mpv.playlistAppendAsync(path)
       }
     }
     postNotification(.iinaPlaylistChanged)
@@ -2221,6 +2230,11 @@ class PlayerCore: NSObject {
     let remaining: Double
     let path: String?
     let mediaTitle: String?
+    let trackList: TrackList
+    let selectedTracks: SelectedTracks
+    let chapters: [MPVChapter]
+    let abLoopA: Double
+    let abLoopB: Double
   }
 
   /// Read the properties of the file `mpv` has just loaded.
@@ -2236,7 +2250,12 @@ class PlayerCore: NSObject {
                  mpv.getDouble(MPVProperty.playtimeRemainingFull) :
                  mpv.getDouble(MPVProperty.timeRemainingFull),
                path: mpv.getString(MPVProperty.path),
-               mediaTitle: mpv.getString(MPVProperty.mediaTitle))
+               mediaTitle: mpv.getString(MPVProperty.mediaTitle),
+               trackList: readTrackList(),
+               selectedTracks: readSelectedTracks(),
+               chapters: readChapters(),
+               abLoopA: abLoopA,
+               abLoopB: abLoopB)
   }
 
   /// A [MPV_EVENT_FILE_LOADED](https://mpv.io/manual/stable/#command-interface-mpv-event-file-loaded)
@@ -2274,11 +2293,11 @@ class PlayerCore: NSObject {
     // The thumbnails of the previous file must not be shown for this file. Thumbnails for this file
     // are generated once its video is ready, see notifyWindowVideoSizeChanged.
     info.thumbnailsReady = false
-    // call `trackListChanged` to load tracks and check whether need to switch to music mode
-    trackListChanged()
+    // call `trackListChanged` to store the tracks and check whether need to switch to music mode
+    trackListChanged(loadedFile.trackList, loadedFile.selectedTracks)
     getPlaylist()
-    getChapters()
-    syncAbLoop()
+    storeChapters(loadedFile.chapters)
+    storeAbLoop(a: loadedFile.abLoopA, b: loadedFile.abLoopB)
     refreshSyncUITimer()
     touchBarSupport.setupTouchBarUI()
 
@@ -2605,14 +2624,14 @@ class PlayerCore: NSObject {
     }
   }
 
-  func trackListChanged() {
-    // No need to process track list changes if playback is being stopped. Must not process track
-    // list changes if mpv is terminating as accessing mpv once shutdown has been initiated can
-    // trigger a crash.
+  /// The track list changed. The tracks and the tracks selected have been read on the queue for reading `mpv` events, so that the
+  /// main thread does not wait for `mpv`.
+  func trackListChanged(_ trackList: TrackList, _ selectedTracks: SelectedTracks) {
+    // No need to process track list changes if playback is being stopped.
     guard info.state.active else { return }
     log("Track list changed")
-    getTrackInfo()
-    getSelectedTracks()
+    storeTrackList(trackList)
+    storeSelectedTracks(selectedTracks)
     let audioStatus = info.isAudio
 
     // Now Playing is first updated when the file starts, before the track list is known, so the
@@ -2885,11 +2904,29 @@ class PlayerCore: NSObject {
   ///     of the last frame of the video. This is especially noticeable if the onscreen controller time labels are configured to show
   ///     milliseconds. Due to this behavior of the `time-pos` property, this method checks to see of the end of the video has been
   ///     reached and if so, sets `videoPosition` to match `videoDuration`.
-  private func syncPosition() {
-    if info.isNetworkResource {
-      info.videoDuration?.second = mpv.getDouble(MPVProperty.duration)
+  ///
+  /// The values are asked of `mpv` in one asynchronous request, so the main thread does not wait for it, and stored on the main
+  /// thread once it answers; `completion` is then called there.
+  private func syncPosition(then completion: @escaping () -> Void) {
+    let isNetworkStream = info.isNetworkResource
+    var names = [MPVProperty.eofReached, MPVProperty.timePos]
+    if isNetworkStream {
+      names.append(MPVProperty.duration)
     }
-    storePosition(eofReached: mpv.getFlag(MPVProperty.eofReached), timePos: mpv.getDouble(MPVProperty.timePos))
+    mpv.getNodesAsync(names) { values in
+      // On main because PlaybackInfo is confined to the main thread, see MPVController.queue.
+      DispatchQueue.main.async { [self] in
+        if info.state.active {
+          // A value mpv could not read counts as zero or false, as it did when the values were read waiting for mpv.
+          func number(_ value: Any?) -> Double { value as? Double ?? (value as? Int64).map(Double.init) ?? 0 }
+          if isNetworkStream {
+            info.videoDuration?.second = number(values[2])
+          }
+          storePosition(eofReached: values[0] as? Bool ?? false, timePos: number(values[1]))
+        }
+        completion()
+      }
+    }
   }
 
   /// Store the video position given by `eof-reached` and `time-pos`, see `syncPosition`.
@@ -2972,15 +3009,36 @@ class PlayerCore: NSObject {
     }
   }
 
-  /// Synchronize the cached video position if the timer that updates the cache is not running.
+  /// Synchronize the cached video position if the timer that updates the cache is not running, without waiting for `mpv`.
   ///
   /// When portions of the UI that need the video position are visible (OSC, OSD), `syncUITimer` keeps the
   /// `info.videoPosition` property synchronized with mpv. Code outside of the UI needs to call this method before accessing
-  /// the position to ensure the cache is up to date when the timer is not running..
-  func syncPositionIfNeeded() {
+  /// the position to ensure the cache is up to date when the timer is not running.
+  /// - Parameter completion: Called on the main thread once the cached position is up to date: at once when the timer is running
+  ///     or the player is not active, otherwise once `mpv` has answered and the position is stored.
+  func syncPositionIfNeeded(then completion: @escaping () -> Void) {
+    if let syncUITimer, syncUITimer.isValid {
+      completion()
+      return
+    }
+    guard info.state.active else {
+      completion()
+      return
+    }
+    syncPosition(then: completion)
+  }
+
+  /// Synchronize the cached video position if the timer that updates the cache is not running, waiting for `mpv`.
+  ///
+  /// - Important: This waits for `mpv`. It serves only the JavaScript status API, whose getters run on the main thread and must
+  ///     answer a plugin at once; every other caller uses `syncPositionIfNeeded(then:)`.
+  func syncPositionIfNeededWaiting() {
     if let syncUITimer, syncUITimer.isValid { return }
     guard info.state.active else { return }
-    syncPosition()
+    if info.isNetworkResource {
+      info.videoDuration?.second = mpv.getDouble(MPVProperty.duration)
+    }
+    storePosition(eofReached: mpv.getFlag(MPVProperty.eofReached), timePos: mpv.getDouble(MPVProperty.timePos))
   }
 
   // difficult to use option set
@@ -3110,44 +3168,81 @@ class PlayerCore: NSObject {
 
   // MARK: - Getting info
 
+  /// The tracks of a file, by type, see `readTrackList`.
+  struct TrackList {
+    var audio: [MPVTrack] = []
+    var video: [MPVTrack] = []
+    var sub: [MPVTrack] = []
+  }
+
+  /// The tracks selected, see `readSelectedTracks`.
+  struct SelectedTracks {
+    let aid: Int
+    let vid: Int
+    let sid: Int
+    let secondSid: Int
+  }
+
   func getTrackInfo() {
-    info.audioTracks.removeAll(keepingCapacity: true)
-    info.videoTracks.removeAll(keepingCapacity: true)
-    info.$subTracks.withLock {
-      $0.removeAll(keepingCapacity: true)
-      let raw = mpv.getNode(MPVProperty.trackList)
-      guard let list = raw as? [[String: Any]] else {
+    storeTrackList(readTrackList())
+  }
+
+  /// Read the track list of `mpv`. This waits for `mpv`.
+  func readTrackList() -> TrackList {
+    var tracks = TrackList()
+    let raw = mpv.getNode(MPVProperty.trackList)
+    guard let list = raw as? [[String: Any]] else {
+      // Internal error, should not occur.
+      log("Cast of mpv node failed while getting track list: \(String(describing: raw))",
+          level: .error)
+      return tracks
+    }
+    for dict in list {
+      guard let track = MPVTrack(dict) else {
         // Internal error, should not occur.
-        log("Cast of mpv node failed while getting track list: \(String(describing: raw))",
-            level: .error)
-        return
+        log("Unable to construct MPVTrack from mpv node map: \(dict)", level: .error)
+        continue
       }
-      for dict in list {
-        guard let track = MPVTrack(dict) else {
-          // Internal error, should not occur.
-          log("Unable to construct MPVTrack from mpv node map: \(dict)", level: .error)
-          continue
-        }
-        // add to lists
-        switch track.type {
-        case .audio:
-          info.audioTracks.append(track)
-        case .video:
-          info.videoTracks.append(track)
-        case .sub:
-          $0.append(track)
-        default:
-          break
-        }
+      // add to lists
+      switch track.type {
+      case .audio:
+        tracks.audio.append(track)
+      case .video:
+        tracks.video.append(track)
+      case .sub:
+        tracks.sub.append(track)
+      default:
+        break
       }
     }
+    return tracks
+  }
+
+  /// Store the track list read from `mpv`.
+  private func storeTrackList(_ tracks: TrackList) {
+    info.audioTracks = tracks.audio
+    info.videoTracks = tracks.video
+    info.$subTracks.withLock { $0 = tracks.sub }
   }
 
   func getSelectedTracks() {
-    info.aid = mpv.getInt(MPVOption.TrackSelection.aid)
-    info.vid = mpv.getInt(MPVOption.TrackSelection.vid)
-    info.sid = mpv.getInt(MPVOption.TrackSelection.sid)
-    info.secondSid = mpv.getInt(MPVOption.Subtitles.secondarySid)
+    storeSelectedTracks(readSelectedTracks())
+  }
+
+  /// Read the tracks `mpv` has selected. This waits for `mpv`.
+  func readSelectedTracks() -> SelectedTracks {
+    SelectedTracks(aid: mpv.getInt(MPVOption.TrackSelection.aid),
+                   vid: mpv.getInt(MPVOption.TrackSelection.vid),
+                   sid: mpv.getInt(MPVOption.TrackSelection.sid),
+                   secondSid: mpv.getInt(MPVOption.Subtitles.secondarySid))
+  }
+
+  /// Store the tracks selected, read from `mpv`.
+  private func storeSelectedTracks(_ selected: SelectedTracks) {
+    info.aid = selected.aid
+    info.vid = selected.vid
+    info.sid = selected.sid
+    info.secondSid = selected.secondSid
   }
 
   /// Rebuild the playlist from `mpv`'s, read in one request without waiting for `mpv`.
@@ -3179,15 +3274,22 @@ class PlayerCore: NSObject {
   }
 
   func getChapters() {
+    storeChapters(readChapters())
+  }
+
+  /// Read the chapter list of `mpv`. This waits for `mpv`.
+  func readChapters() -> [MPVChapter] {
     log("Reloading chapter list", level: .verbose)
-    var chapters: [MPVChapter] = []
     let chapterCount = mpv.getInt(MPVProperty.chapterListCount)
-    for index in 0..<chapterCount {
-      let chapter = MPVChapter(title:     mpv.getString(MPVProperty.chapterListNTitle(index)),
-                               startTime: mpv.getDouble(MPVProperty.chapterListNTime(index)),
-                               index:     index)
-      chapters.append(chapter)
+    return (0..<chapterCount).map { index in
+      MPVChapter(title:     mpv.getString(MPVProperty.chapterListNTitle(index)),
+                 startTime: mpv.getDouble(MPVProperty.chapterListNTime(index)),
+                 index:     index)
     }
+  }
+
+  /// Store the chapter list read from `mpv`.
+  private func storeChapters(_ chapters: [MPVChapter]) {
     // Instead of modifying existing list, overwrite reference to prev list.
     // This will avoid concurrent modification crashes
     info.chapters = chapters

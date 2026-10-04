@@ -20,6 +20,12 @@ extension MPVController {
     asyncCommand(.loadfile, args: [path, "append"], replyUserdata: 0, level: .verbose)
   }
 
+  /// Insert the given file into the playlist at the given index without waiting for `mpv`, which inserts it after the requests
+  /// made before. A file inserted at an index past the end of the playlist is appended.
+  func playlistInsertAsync(_ path: String, index: Int) {
+    asyncCommand(.loadfile, args: [path, "insert-at", index.description], replyUserdata: 0, level: .verbose)
+  }
+
   func playlistMove(_ from: Int, to: Int) {
     command(.playlistMove, args: ["\(from)", "\(to)"], level: .verbose)
   }

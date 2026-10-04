@@ -120,7 +120,8 @@ class MPVController: NSObject {
   private var scrollSeekAttribution = ScrollSeekAttribution()
 
   /// The callbacks waiting for `mpv` to reply to asynchronous requests made with a reply.
-  private let replyCallbacks = MPVReplyCallbacks()
+  /// The callbacks of the requests awaiting `mpv`'s answer. Internal so that tests can count them.
+  let replyCallbacks = MPVReplyCallbacks()
 
   @Atomic private var hooks: [UInt64: MPVHookValue] = [:]
   private var hookCounter: UInt64 = 1
@@ -892,6 +893,17 @@ class MPVController: NSObject {
     return mpv_set_property_string(mpv, name, value)
   }
 
+  /// Set the given string property asynchronously, without waiting for `mpv`, see `setFlagAsync`.
+  func setStringAsync(_ name: String, _ value: String, level: Logger.Level = .debug) {
+    guard mpv != nil else { return }
+    log("Asynchronously set property: \(name)=\(value)", level: level)
+    value.withCString { cString in
+      // mpv copies the value before this returns.
+      var data: UnsafePointer<CChar>? = cString
+      mpv_set_property_async(mpv, 0, name, MPV_FORMAT_STRING, &data)
+    }
+  }
+
   @discardableResult
   func setStringToDefault(_ name: String, level: Logger.Level = .debug) -> Int32 {
     guard let value = MPVOptionDefaults.shared.getString(name) else {
@@ -1613,7 +1625,10 @@ class MPVController: NSObject {
       DispatchQueue.main.async { self.player.postNotification(.iinaPlaylistChanged) }
 
     case MPVProperty.trackList:
-      DispatchQueue.main.async { self.player.trackListChanged() }
+      // Read here, as the tracks of a file are when it is loaded, so that the main thread does not wait for mpv.
+      let trackList = player.readTrackList()
+      let selectedTracks = player.readSelectedTracks()
+      DispatchQueue.main.async { self.player.trackListChanged(trackList, selectedTracks) }
 
     case MPVProperty.vf:
       DispatchQueue.main.async { [self] in
@@ -1987,6 +2002,11 @@ final class MPVReplyCallbacks {
   /// Remove and return the callback of the request made with the given user data, or `nil` if there is none.
   func take(_ userdata: UInt64) -> Callback? {
     return $callbacks.withLock { $0.removeValue(forKey: userdata) }
+  }
+
+  /// The number of requests registered that `mpv` has not answered.
+  var count: Int {
+    $callbacks.withLock { $0.count }
   }
 }
 

@@ -171,6 +171,19 @@ extension PlayerCore {
     return []
   }
 
+  /// Whether any of the dropped paths can be opened, judged by its extension alone without reading any file: a path that is not a
+  /// subtitle or multiple-file playlist file may be a folder or a playable file, a playlist file dropped alone is opened as a
+  /// playlist, and a subtitle file is loaded when no playable file is found.
+  func canOpen(droppedPaths paths: [String]) -> Bool {
+    if paths.count == 1 && Utility.playlistFileExt.contains(paths[0].lowercasedPathExtension) {
+      return true
+    }
+    return paths.contains { path in
+      let ext = path.lowercasedPathExtension
+      return !Utility.blacklistExt.contains(ext) || Utility.supportedFileExt[.sub]!.contains(ext)
+    }
+  }
+
   /**
    Get called for all drag-and-drop enabled window/views in their `performDragOperation(_:)`.
 
@@ -198,6 +211,9 @@ extension PlayerCore {
         return result
       }
 
+      // A drop none of whose paths can be opened is refused, judged by their extensions alone so that the main thread does not
+      // read the filesystem.
+      guard canOpen(droppedPaths: paths) else { return false }
       let urls = paths.map{ URL(fileURLWithPath: $0) }
       // try open files
       let opened = { [self] (loadedFileCount: Int?) in
