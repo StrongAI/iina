@@ -110,7 +110,6 @@ extension PlayerCore {
 
       return canOpen(droppedPaths: paths) ? .copy : []
     } else if types.contains(.nsURL) {
-    } else if types.contains(.nsURL) {
       return .copy
     } else if let droppedString = pb.string(forType: .string) {
       return Regex.url.matches(droppedString) || Regex.filePath.matches(droppedString) ? .copy : []

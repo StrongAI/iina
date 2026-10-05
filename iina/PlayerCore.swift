@@ -1586,26 +1586,32 @@ class PlayerCore: NSObject {
   /// - Parameter completion: Called on the main thread once the track list read after the reloads has been stored.
   func reloadAllSubs(then completion: (() -> Void)? = nil) {
     let currentSubName = info.currentTrack(.sub)?.externalFilename
+    let reloads = DispatchGroup()
     info.$subTracks.withLock {
       for subTrack in $0 {
+        reloads.enter()
         mpv.asyncCommand(.subReload, args: ["\(subTrack.id)"]) { code in
           if code < 0 {
             self.log("Failed reloading subtitles: error code \(code)", level: .error)
           }
+          reloads.leave()
         }
       }
     }
-    // mpv answers in the order it is asked, so the track list read holds the reloaded tracks.
-    mpv.getNodeAsync(MPVProperty.trackList) { [self] node in
-      let tracks = trackList(from: node)
-      DispatchQueue.main.async { [self] in
-        storeTrackList(tracks)
-        info.$subTracks.withLock {
-          if let currentSub = $0.first(where: {$0.externalFilename == currentSubName}) {
-            setTrack(currentSub.id, forType: .sub)
+    // mpv reloads a track on a thread of its own and answers once the track is added again, so the track list is read once every
+    // reload has been answered, off the main thread.
+    reloads.notify(queue: .global(qos: .userInitiated)) { [self] in
+      mpv.getNodeAsync(MPVProperty.trackList) { [self] node in
+        let tracks = trackList(from: node)
+        DispatchQueue.main.async { [self] in
+          storeTrackList(tracks)
+          info.$subTracks.withLock {
+            if let currentSub = $0.first(where: {$0.externalFilename == currentSubName}) {
+              setTrack(currentSub.id, forType: .sub)
+            }
           }
+          completion?()
         }
-        completion?()
       }
     }
   }

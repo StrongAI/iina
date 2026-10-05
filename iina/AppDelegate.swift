@@ -389,43 +389,64 @@ class AppDelegate: NSObject, NSApplicationDelegate, SPUUpdaterDelegate {
       // check whether showing the welcome window after 0.1s
       Timer.scheduledTimer(timeInterval: TimeInterval(0.1), target: self, selector: #selector(self.checkForShowingInitialWindow), userInfo: nil, repeats: false)
     } else {
-      var lastPlayerCore: PlayerCore? = nil
-      let getNewPlayerCore = { [self] () -> PlayerCore in
-        let pc = PlayerCore.newPlayerCore
-        commandLineStatus.applyMPVArguments(to: pc)
-        lastPlayerCore = pc
-        return pc
-      }
-      // The players open their files once they have found them off the main thread, so the mode the command line asks for is
-      // entered once the last player has opened its files.
-      let enterRequestedMode = { [self] in
-        if let pc = lastPlayerCore {
-          if commandLineStatus.enterMusicMode {
-            if commandLineStatus.enterPIP {
-              // PiP is not supported in music mode. Combining these options is not permitted and is
-              // rejected by iina-cli. The IINA executable must have been invoked directly with
-              // arguments.
-              Logger.log("Cannot specify both --music-mode and --pip", level: .error)
-              // Command line usage error.
-              exit(EX_USAGE)
-            }
-            pc.switchToMiniPlayer()
-          } else if commandLineStatus.enterPIP {
-            pc.mainWindow.enterPIP()
+      openFromCommandLine(commandLineStatus)
+    }
+
+    NSRunningApplication.current.activate(options: [.activateIgnoringOtherApps, .activateAllWindows])
+
+    NSApplication.shared.servicesProvider = self
+
+    AppDelegate.shared.menuController?.updatePluginMenu()
+
+    MemoryUsage.shared.logUsage("after launching finished")
+  }
+
+  /// Open what the command line names, each file or stream in a new player, and enter the mode the command line asks for on the
+  /// last player.
+  ///
+  /// The players open their files once they have found them off the main thread, so the mode the command line asks for is entered
+  /// once the last player has opened its files.
+  func openFromCommandLine(_ commandLineStatus: CommandLineStatus) {
+    var lastPlayerCore: PlayerCore? = nil
+    let getNewPlayerCore = { () -> PlayerCore in
+      let pc = PlayerCore.newPlayerCore
+      commandLineStatus.applyMPVArguments(to: pc)
+      lastPlayerCore = pc
+      return pc
+    }
+    let enterRequestedMode = {
+      if let pc = lastPlayerCore {
+        if commandLineStatus.enterMusicMode {
+          if commandLineStatus.enterPIP {
+            // PiP is not supported in music mode. Combining these options is not permitted and is
+            // rejected by iina-cli. The IINA executable must have been invoked directly with
+            // arguments.
+            Logger.log("Cannot specify both --music-mode and --pip", level: .error)
+            // Command line usage error.
+            exit(EX_USAGE)
           }
+          pc.switchToMiniPlayer()
+        } else if commandLineStatus.enterPIP {
+          pc.mainWindow.enterPIP()
         }
       }
-      if commandLineStatus.isStdin {
-        getNewPlayerCore().openURLString("-")
-        enterRequestedMode()
-      } else {
-        let validFileURLs: [URL] = commandLineStatus.filenames.compactMap { filename in
-          if Regex.url.matches(filename) {
-            return URL(string: filename.addingPercentEncoding(withAllowedCharacters: .urlAllowed) ?? filename)
-          } else {
-            return FileManager.default.fileExists(atPath: filename) ? URL(fileURLWithPath: filename) : nil
-          }
+    }
+    if commandLineStatus.isStdin {
+      getNewPlayerCore().openURLString("-")
+      enterRequestedMode()
+      return
+    }
+    // Whether each file named exists is read off the main thread.
+    DispatchQueue.global(qos: .userInitiated).async {
+      let validFileURLs: [URL] = commandLineStatus.filenames.compactMap { filename in
+        if Regex.url.matches(filename) {
+          return URL(string: filename.addingPercentEncoding(withAllowedCharacters: .urlAllowed) ?? filename)
+        } else {
+          return FileManager.default.fileExists(atPath: filename) ? URL(fileURLWithPath: filename) : nil
         }
+      }
+      // The players and their windows are made on the main thread.
+      DispatchQueue.main.async {
         if commandLineStatus.openSeparateWindows {
           validFileURLs.forEach { url in
             let pc = getNewPlayerCore()
@@ -442,14 +463,6 @@ class AppDelegate: NSObject, NSApplicationDelegate, SPUUpdaterDelegate {
         }
       }
     }
-
-    NSRunningApplication.current.activate(options: [.activateIgnoringOtherApps, .activateAllWindows])
-
-    NSApplication.shared.servicesProvider = self
-
-    AppDelegate.shared.menuController?.updatePluginMenu()
-
-    MemoryUsage.shared.logUsage("after launching finished")
   }
 
   /** Show welcome window if `application(_:openFile:)` wasn't called, i.e. launched normally. */
@@ -959,15 +972,20 @@ class AppDelegate: NSObject, NSApplicationDelegate, SPUUpdaterDelegate {
     panel.canChooseDirectories = true
     panel.allowsMultipleSelection = true
     if panel.runModal() == .OK {
-      if Preference.bool(for: .recordRecentFiles) {
-        for url in panel.urls {
-          noteNewRecentDocumentURL(url)
-        }
+      openChosenFiles(panel.urls)
+    }
+  }
+
+  /// Open the files chosen in the Open panel, telling the user when none of them could be opened once they have been found.
+  func openChosenFiles(_ urls: [URL]) {
+    if Preference.bool(for: .recordRecentFiles) {
+      for url in urls {
+        noteNewRecentDocumentURL(url)
       }
-      PlayerCore.openURLs(panel.urls) { count in
-        if count == 0 {
-          Utility.showAlert("nothing_to_open")
-        }
+    }
+    PlayerCore.openURLs(urls) { count in
+      if count == 0 {
+        Utility.showAlert("nothing_to_open")
       }
     }
   }

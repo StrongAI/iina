@@ -460,9 +460,9 @@ class MenuController: NSObject, NSMenuDelegate {
     }
   }
 
-  private func updateChapterList() {
+  /// List the chapters of `player` in the chapter menu and check the chapter playing.
+  func updateChapterList(of player: PlayerCore) {
     chapterMenu.removeAllItems()
-    let player = PlayerCore.active
     let info = player.info
     let chapters = info.chapters
     let padder = { (time: String) -> String in
@@ -829,7 +829,7 @@ class MenuController: NSObject, NSMenuDelegate {
     case playlistMenu:
       updatePlaylist()
     case chapterMenu:
-      updateChapterList()
+      updateChapterList(of: PlayerCore.active)
     case playbackMenu:
       updatePlaybackMenu()
     case videoMenu:
