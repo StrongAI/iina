@@ -11,35 +11,6 @@ import Foundation
 extension PlayerCore {
 
   /**
-   Checks whether the path list contains playable file and performs early return if so. Don't use this method for a non-file URL.
-
-   - Parameters:
-     - paths: The list as an array of `String`.
-   - Returns: Whether the path list contains playable file.
-   */
-  func hasPlayableFiles(in paths: [String]) -> Bool {
-    for path in paths {
-      if path.isDirectoryAsPath {
-        // is directory, enumerate its content
-        guard let dirEnumerator = FileManager.default.enumerator(atPath: path) else { return false }
-        while let fileName = dirEnumerator.nextObject() as? String {
-          // ignore hidden files
-          guard !fileName.hasPrefix(".") else { continue }
-          if Utility.playableFileExt.contains(fileName.lowercasedPathExtension) {
-            return true
-          }
-        }
-      } else {
-        // is file, check extension
-        if !Utility.blacklistExt.contains(path.lowercasedPathExtension) {
-          return true
-        }
-      }
-    }
-    return false
-  }
-
-  /**
    Returns playable files contained in a URL list. Any non-file URL will be counted directly without further checking.
 
    - Parameters:
@@ -77,19 +48,6 @@ extension PlayerCore {
       } else {
         return folder1.absoluteString < folder2.absoluteString
       }
-    }
-  }
-
-  /**
-   Checks whether a path list contains path to subtitle file.
-
-   - Parameters:
-     - paths: The list as an array of `String`.
-   - Returns: Whether the path list contains path to subtitle file.
-   */
-  func hasSubtitleFile(in paths: [String]) -> Bool {
-    return paths.contains {
-      !$0.isDirectoryAsPath && Utility.supportedFileExt[.sub]!.contains($0.lowercasedPathExtension)
     }
   }
 
@@ -138,31 +96,20 @@ extension PlayerCore {
     guard let types = pb.types else { return [] }
 
     if types.contains(.nsFilenames) {
-      guard var paths = pb.propertyList(forType: .nsFilenames) as? [String] else { return [] }
-      paths = Utility.resolvePaths(paths)
-      
+      guard let paths = pb.propertyList(forType: .nsFilenames) as? [String] else { return [] }
+      // The drag is answered from the names of the dragged paths alone, as the drop is, so that the main thread does not read the
+      // filesystem: a path that is not a subtitle or playlist file may be a folder or a playable file.
       // check 3d lut files
       if paths.count == 1 && Utility.lut3dExt.contains(paths[0].lowercasedPathExtension) {
         return .copy
       }
 
       if isPlaylist {
-        return hasPlayableFiles(in: paths) ? .copy : []
+        return paths.contains { !Utility.blacklistExt.contains($0.lowercasedPathExtension) } ? .copy : []
       }
 
-      if paths.count == 1 {
-        let url = URL(fileURLWithPath: paths[0])
-
-        if isBDFolder(url)
-            || Utility.playlistFileExt.contains(url.absoluteString.lowercasedPathExtension) {
-          return .copy
-        }
-      }
-
-      if hasPlayableFiles(in: paths)
-          || hasSubtitleFile(in: paths) {
-        return .copy
-      }
+      return canOpen(droppedPaths: paths) ? .copy : []
+    } else if types.contains(.nsURL) {
     } else if types.contains(.nsURL) {
       return .copy
     } else if let droppedString = pb.string(forType: .string) {
@@ -197,46 +144,18 @@ extension PlayerCore {
     guard let types = pb.types else { return false }
 
     if types.contains(.nsFilenames) {
-      guard var paths = pb.propertyList(forType: .nsFilenames) as? [String] else { return false }
-      paths = Utility.resolvePaths(paths)
-      // check 3d lut files
-      if paths.count == 1 && Utility.lut3dExt.contains(paths[0].lowercasedPathExtension) {
-        let result = addVideoFilter(MPVFilter(lavfiName: "lut3d", label: "iina_quickl3d", paramDict: [
-          "file": paths[0],
-          "interp": "nearest"
-          ]))
-        if result {
-          sendOSD(.addFilter("3D LUT"))
-        }
-        return result
-      }
-
+      guard let droppedPaths = pb.propertyList(forType: .nsFilenames) as? [String] else { return false }
       // A drop none of whose paths can be opened is refused, judged by their extensions alone so that the main thread does not
       // read the filesystem.
-      guard canOpen(droppedPaths: paths) else { return false }
-      let urls = paths.map{ URL(fileURLWithPath: $0) }
-      // try open files
-      let opened = { [self] (loadedFileCount: Int?) in
-        guard let loadedFileCount else { return }
-        if loadedFileCount == 0 {
-          // if no playable files, try add subtitle files
-          for url in urls {
-            if !url.hasDirectoryPath && Utility.supportedFileExt[.sub]!.contains(url.pathExtension.lowercased()) {
-              loadExternalSubFile(url)
-            }
-          }
-        } else if loadedFileCount == 1 {
-          // loaded one file
-          info.shouldAutoLoadFiles = true
-        } else {
-          // add multiple files to playlist
-          sendOSD(.addToPlaylist(loadedFileCount))
+      guard canOpen(droppedPaths: droppedPaths) else { return false }
+      // Resolving aliases, and making file URLs, which tells a folder from a file, read the filesystem, so they are done off the
+      // main thread, then the files are opened on it.
+      openQueue.async { [self] in
+        let paths = Utility.resolvePaths(droppedPaths)
+        let urls = paths.map { URL(fileURLWithPath: $0) }
+        DispatchQueue.main.async { [self] in
+          openDropped(paths: paths, urls: urls, useGlobalOpenRouting: useGlobalOpenRouting)
         }
-      }
-      if useGlobalOpenRouting {
-        PlayerCore.openURLs(urls, completion: opened)
-      } else {
-        openURLs(urls, completion: opened)
       }
       // The files are found off the main thread, so whether any of them, or a subtitle file in their place, can be opened is not
       // known when the drop is answered. The drop is accepted.
@@ -257,4 +176,43 @@ extension PlayerCore {
     return false
   }
 
+  /// Open the dropped files, given by their paths with aliases resolved and by their file URLs: a 3D LUT file dropped alone is added
+  /// as a video filter, and otherwise the files are opened, a subtitle file among them being loaded when none can be played.
+  private func openDropped(paths: [String], urls: [URL], useGlobalOpenRouting: Bool) {
+    // check 3d lut files
+    if paths.count == 1 && Utility.lut3dExt.contains(paths[0].lowercasedPathExtension) {
+      let result = addVideoFilter(MPVFilter(lavfiName: "lut3d", label: "iina_quickl3d", paramDict: [
+        "file": paths[0],
+        "interp": "nearest"
+        ]))
+      if result {
+        sendOSD(.addFilter("3D LUT"))
+      }
+      return
+    }
+
+    // try open files
+    let opened = { [self] (loadedFileCount: Int?) in
+      guard let loadedFileCount else { return }
+      if loadedFileCount == 0 {
+        // if no playable files, try add subtitle files
+        for url in urls {
+          if !url.hasDirectoryPath && Utility.supportedFileExt[.sub]!.contains(url.pathExtension.lowercased()) {
+            loadExternalSubFile(url)
+          }
+        }
+      } else if loadedFileCount == 1 {
+        // loaded one file
+        info.shouldAutoLoadFiles = true
+      } else {
+        // add multiple files to playlist
+        sendOSD(.addToPlaylist(loadedFileCount))
+      }
+    }
+    if useGlobalOpenRouting {
+      PlayerCore.openURLs(urls, completion: opened)
+    } else {
+      openURLs(urls, completion: opened)
+    }
+  }
 }

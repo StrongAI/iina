@@ -26,12 +26,15 @@ extension MPVController {
     asyncCommand(.loadfile, args: [path, "insert-at", index.description], replyUserdata: 0, level: .verbose)
   }
 
-  func playlistMove(_ from: Int, to: Int) {
-    command(.playlistMove, args: ["\(from)", "\(to)"], level: .verbose)
+  /// Move the playlist entry at `from` to before the entry at `to` without waiting for `mpv`, which moves it after the requests made
+  /// before.
+  func playlistMoveAsync(_ from: Int, to: Int) {
+    asyncCommand(.playlistMove, args: ["\(from)", "\(to)"], replyUserdata: 0, level: .verbose)
   }
 
-  func playlistRemove(_ index: Int) {
-    command(.playlistRemove, args: [index.description], level: .verbose)
+  /// Remove the playlist entry at the given index without waiting for `mpv`, which removes it after the requests made before.
+  func playlistRemoveAsync(_ index: Int) {
+    asyncCommand(.playlistRemove, args: [index.description], replyUserdata: 0, level: .verbose)
   }
 
 }

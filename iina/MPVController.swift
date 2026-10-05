@@ -887,6 +887,22 @@ class MPVController: NSObject {
     mpv_set_property(mpv, name, MPV_FORMAT_DOUBLE, &data)
   }
 
+  /// Set the given integer property asynchronously, without waiting for `mpv`, see `setFlagAsync`.
+  func setIntAsync(_ name: String, _ value: Int, level: Logger.Level = .debug) {
+    guard mpv != nil else { return }
+    log("Asynchronously set property: \(name)=\(value)", level: level)
+    var data = Int64(value)
+    mpv_set_property_async(mpv, 0, name, MPV_FORMAT_INT64, &data)
+  }
+
+  /// Set the given double property asynchronously, without waiting for `mpv`, see `setFlagAsync`.
+  func setDoubleAsync(_ name: String, _ value: Double, level: Logger.Level = .debug) {
+    guard mpv != nil else { return }
+    log("Asynchronously set property: \(name)=\(value)", level: level)
+    var data = value
+    mpv_set_property_async(mpv, 0, name, MPV_FORMAT_DOUBLE, &data)
+  }
+
   @discardableResult
   func setString(_ name: String, _ value: String, level: Logger.Level = .debug) -> Int32 {
     log("Set property: \(name)=\(value)", level: level)
@@ -1405,7 +1421,9 @@ class MPVController: NSObject {
       DispatchQueue.main.async { self.player.refreshEdrMode() }
 
     case MPVOption.TrackSelection.vid:
-      DispatchQueue.main.async { self.player.vidChanged() }
+      // The track id mpv reports, 0 when it reports none, as a read of the property would give.
+      let vid = UnsafePointer<Int>(OpaquePointer(property.data))?.pointee ?? 0
+      DispatchQueue.main.async { self.player.vidChanged(vid) }
 
     case MPVOption.TrackSelection.aid:
       // The track id mpv reports, 0 when it reports none, as a read of the property would give.
@@ -1417,7 +1435,9 @@ class MPVController: NSObject {
       DispatchQueue.main.async { self.player.sidChanged(sid) }
 
     case MPVOption.Subtitles.secondarySid:
-      DispatchQueue.main.async { self.player.secondarySidChanged() }
+      // The track id mpv reports, 0 when it reports none, as a read of the property would give.
+      let secondSid = UnsafePointer<Int>(OpaquePointer(property.data))?.pointee ?? 0
+      DispatchQueue.main.async { self.player.secondarySidChanged(secondSid) }
 
     case MPVOption.PlaybackControl.pause:
       guard let paused = UnsafePointer<Bool>(OpaquePointer(property.data))?.pointee else {
@@ -1439,18 +1459,13 @@ class MPVController: NSObject {
       DispatchQueue.main.async { self.player.speedChanged(speed) }
 
     case MPVOption.PlaybackControl.loopPlaylist, MPVOption.PlaybackControl.loopFile:
-      DispatchQueue.main.async { [self] in
-        let loopMode = player.getLoopMode()
-        switch loopMode {
-        case .file:
-          player.sendOSD(.fileLoop)
-        case .playlist:
-          player.sendOSD(.playlistLoop)
-        default:
-          player.sendOSD(.noLoop)
-        }
-        player.postNotification(.iinaLoopStatusChanged)
+      // The value mpv reports in the change, so that the main thread does not read it back waiting for mpv.
+      guard property.format == MPV_FORMAT_STRING, let data = property.data else {
+        logPropertyValueError(name, property.format)
+        break
       }
+      let value = String(cString: data.assumingMemoryBound(to: UnsafePointer<CChar>.self).pointee)
+      DispatchQueue.main.async { self.player.loopOptionChanged(name, value) }
 
     case MPVOption.Video.deinterlace:
       guard let data = UnsafePointer<Bool>(OpaquePointer(property.data))?.pointee else {

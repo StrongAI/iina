@@ -377,7 +377,9 @@ extension AutoFileMatcher: FolderPlaylist {
   }
 
   func append(_ path: String) {
-    player.appendToPlaylist(path, silent: true)
+    // This runs off the main thread and waits for mpv, as the insert below does, so that the files are added in the order asked.
+    player.mpv.playlistAppend(path)
+    player.info.isShuffled = false
   }
 
   func insert(_ path: String, at index: Int) {

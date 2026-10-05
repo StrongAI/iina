@@ -217,7 +217,7 @@ class PlayerCore: NSObject {
 
   /// The URLs of each open finding its files on the queue for opening files, in the order the opens were asked. The player stays
   /// idle until they open the files, and is not handed out as an idle player in the meantime. Read and written on the main thread.
-  private var opensFindingFiles: [[URL]] = []
+  private(set) var opensFindingFiles: [[URL]] = []
 
   var initialWindow: InitialWindowController!
 
@@ -287,7 +287,7 @@ class PlayerCore: NSObject {
     /// - Note: The value of the A loop point is not required by mpv to be before the B loop point.
     set {
       guard info.abLoopStatus == .aSet || info.abLoopStatus == .bSet else { return }
-      mpv.setDouble(MPVOption.PlaybackControl.abLoopA, max(PlayerCore.minLoopPointTime, newValue))
+      mpv.setDoubleAsync(MPVOption.PlaybackControl.abLoopA, max(PlayerCore.minLoopPointTime, newValue))
     }
   }
 
@@ -307,7 +307,7 @@ class PlayerCore: NSObject {
     /// - Note: The value of the B loop point is not required by mpv to be after the A loop point.
     set {
       guard info.abLoopStatus == .bSet else { return }
-      mpv.setDouble(MPVOption.PlaybackControl.abLoopB, max(PlayerCore.minLoopPointTime, newValue))
+      mpv.setDoubleAsync(MPVOption.PlaybackControl.abLoopB, max(PlayerCore.minLoopPointTime, newValue))
     }
   }
 
@@ -632,10 +632,8 @@ class PlayerCore: NSObject {
 
     if Preference.bool(for: .autoRepeat) {
       let loopMode = Preference.DefaultRepeatMode(rawValue: Preference.integer(for: .defaultRepeatMode))
-      // Like the load file command, these do not wait for mpv, which sets them after it.
-      for (name, value) in loopOptions(loopMode == .file ? .file : .playlist) {
-        mpv.setStringAsync(name, value)
-      }
+      // Like the load file command, this does not wait for mpv, which sets the loop after it.
+      setLoopMode(loopMode == .file ? .file : .playlist)
     }
   }
 
@@ -1263,17 +1261,20 @@ class PlayerCore: NSObject {
   /// When the command is first invoked it sets the A loop point to the timestamp of the current frame. When the command is invoked
   /// a second time it sets the B loop point to the timestamp of the current frame, activating looping and causing mpv to seek back to
   /// the A loop point. When the command is invoked again both loop points are cleared (set to zero) and looping stops.
-  func abLoop() {
+  /// - Parameter completion: Called on the main thread with the loop points `mpv` answers once it has run the command.
+  func abLoop(then completion: ((_ a: Double, _ b: Double) -> Void)? = nil) {
     // may subject to change
-    mpv.command(.abLoop)
-    syncAbLoop()
-    sendOSD(.abLoop(info.abLoopStatus))
-  }
-
-  /// Synchronize IINA with the state of the [mpv](https://mpv.io/manual/stable/) A-B loop command.
-  func syncAbLoop() {
-    // Obtain the values of the ab-loop-a and ab-loop-b options representing the A & B loop points.
-    storeAbLoop(a: abLoopA, b: abLoopB)
+    // Neither the command nor the read of the loop points it sets waits for mpv, which answers them in the order they are asked.
+    mpv.asyncCommand(.abLoop, replyUserdata: 0)
+    // ab-loop-a and ab-loop-b read as "no" when not set, which is taken as zero, as a read of their values as numbers gives.
+    mpv.getNodesAsync([MPVOption.PlaybackControl.abLoopA, MPVOption.PlaybackControl.abLoopB]) { [self] values in
+      let a = values[0] as? Double ?? 0, b = values[1] as? Double ?? 0
+      DispatchQueue.main.async { [self] in
+        storeAbLoop(a: a, b: b)
+        sendOSD(.abLoop(info.abLoopStatus))
+        completion?(a, b)
+      }
+    }
   }
 
   /// Store the A-B loop status the given loop points, read from `mpv`, represent and show them on the play slider.
@@ -1319,23 +1320,50 @@ class PlayerCore: NSObject {
     }
   }
 
+  /// The loop mode the values of `loop-file` and `loop-playlist` stored in `info` give: the values `mpv` last reported, or that IINA
+  /// asked it to set since. This does not ask `mpv`.
   func getLoopMode() -> LoopMode {
-    let loopFileStatus = mpv.getString(MPVOption.PlaybackControl.loopFile)
+    let loopFileStatus = info.loopFile
     guard loopFileStatus != "inf" else { return .file }
-    if let loopFileStatus, let count = Int(loopFileStatus), count != 0 {
+    if let count = Int(loopFileStatus), count != 0 {
       return .file
     }
-    let loopPlaylistStatus = mpv.getString(MPVOption.PlaybackControl.loopPlaylist)
+    let loopPlaylistStatus = info.loopPlaylist
     guard loopPlaylistStatus != "inf", loopPlaylistStatus != "force" else { return .playlist }
-    guard let loopPlaylistStatus, let count = Int(loopPlaylistStatus) else {
+    guard let count = Int(loopPlaylistStatus) else {
       return .off
     }
     return count == 0 ? .off : .playlist
   }
 
+  /// Ask `mpv` to set the given loop mode without waiting for it. The values asked for are stored at once, so that the loop mode
+  /// read before `mpv` reports them is the one asked for.
   func setLoopMode(_ newMode: LoopMode) {
     for (name, value) in loopOptions(newMode) {
-      mpv.setString(name, value)
+      storeLoopOption(name, value)
+      mpv.setStringAsync(name, value)
+    }
+  }
+
+  /// `mpv` reported a change of `loop-file` or `loop-playlist`: store the value it reported and show the loop mode it gives.
+  func loopOptionChanged(_ name: String, _ value: String) {
+    storeLoopOption(name, value)
+    switch getLoopMode() {
+    case .file:
+      sendOSD(.fileLoop)
+    case .playlist:
+      sendOSD(.playlistLoop)
+    default:
+      sendOSD(.noLoop)
+    }
+    postNotification(.iinaLoopStatusChanged)
+  }
+
+  private func storeLoopOption(_ name: String, _ value: String) {
+    if name == MPVOption.PlaybackControl.loopFile {
+      info.loopFile = value
+    } else {
+      info.loopPlaylist = value
     }
   }
 
@@ -1393,8 +1421,8 @@ class PlayerCore: NSObject {
     case .secondSub:
       name = MPVOption.Subtitles.secondarySid
     }
-    mpv.setInt(name, index)
-    getSelectedTracks()
+    // This does not wait for mpv. The track mpv selects is stored when it reports the change.
+    mpv.setIntAsync(name, index)
   }
 
   func setSpeed(_ speed: Double) {
@@ -1554,21 +1582,30 @@ class PlayerCore: NSObject {
     }
   }
 
-  func reloadAllSubs() {
+  /// Reload the subtitle tracks, then select the reloaded track of the subtitle file selected before, without waiting for `mpv`.
+  /// - Parameter completion: Called on the main thread once the track list read after the reloads has been stored.
+  func reloadAllSubs(then completion: (() -> Void)? = nil) {
     let currentSubName = info.currentTrack(.sub)?.externalFilename
     info.$subTracks.withLock {
       for subTrack in $0 {
-        mpv.command(.subReload, args: ["\(subTrack.id)"], checkError: false) { code in
+        mpv.asyncCommand(.subReload, args: ["\(subTrack.id)"]) { code in
           if code < 0 {
             self.log("Failed reloading subtitles: error code \(code)", level: .error)
           }
         }
       }
     }
-    getTrackInfo()
-    info.$subTracks.withLock {
-      if let currentSub = $0.first(where: {$0.externalFilename == currentSubName}) {
-        setTrack(currentSub.id, forType: .sub)
+    // mpv answers in the order it is asked, so the track list read holds the reloaded tracks.
+    mpv.getNodeAsync(MPVProperty.trackList) { [self] node in
+      let tracks = trackList(from: node)
+      DispatchQueue.main.async { [self] in
+        storeTrackList(tracks)
+        info.$subTracks.withLock {
+          if let currentSub = $0.first(where: {$0.externalFilename == currentSubName}) {
+            setTrack(currentSub.id, forType: .sub)
+          }
+        }
+        completion?()
       }
     }
   }
@@ -1583,7 +1620,7 @@ class PlayerCore: NSObject {
   }
 
   func appendToPlaylist(_ path: String, silent: Bool = false) {
-    mpv.playlistAppend(path)
+    mpv.playlistAppendAsync(path)
     info.isShuffled = false
     if !silent {
       postNotification(.iinaPlaylistChanged)
@@ -1591,7 +1628,7 @@ class PlayerCore: NSObject {
   }
 
   func playlistMove(_ from: Int, to: Int) {
-    mpv.playlistMove(from, to: to)
+    mpv.playlistMoveAsync(from, to: to)
     info.isShuffled = false
     postNotification(.iinaPlaylistChanged)
   }
@@ -1600,19 +1637,20 @@ class PlayerCore: NSObject {
     guard Set(info.playlist) == Set(newPlaylist) else { return }
     if info.playlist == newPlaylist { return }
     info.isShuffled = false
-    mpv.command(.playlistClear)
+    // These do not wait for mpv, which clears the playlist and adds the files in the order they are asked.
+    mpv.asyncCommand(.playlistClear, replyUserdata: 0)
     guard let currentPlaying = newPlaylist.firstIndex(where: { $0.isPlaying } ) else {
       for item in newPlaylist {
-        mpv.playlistAppend(item.filename)
+        mpv.playlistAppendAsync(item.filename)
       }
       return
     }
 
     for i in (0..<currentPlaying).reversed() {
-      mpv.playlistInsert(newPlaylist[i].filename, index: 0)
+      mpv.playlistInsertAsync(newPlaylist[i].filename, index: 0)
     }
     for i in currentPlaying + 1..<newPlaylist.count {
-      mpv.playlistAppend(newPlaylist[i].filename)
+      mpv.playlistAppendAsync(newPlaylist[i].filename)
     }
 
     postNotification(.iinaPlaylistChanged)
@@ -1633,16 +1671,17 @@ class PlayerCore: NSObject {
   }
 
   func playlistRemove(_ index: Int) {
-    mpv.playlistRemove(index)
+    mpv.playlistRemoveAsync(index)
     info.isShuffled = false
     postNotification(.iinaPlaylistChanged)
   }
 
   func playlistRemove(_ indexSet: IndexSet) {
     guard !indexSet.isEmpty else { return }
+    // mpv removes the entries in the order they are asked, so each index is moved back by the entries removed before it.
     var count = 0
     for i in indexSet {
-      mpv.playlistRemove(i - count)
+      mpv.playlistRemoveAsync(i - count)
       count += 1
     }
     info.isShuffled = false
@@ -1650,7 +1689,7 @@ class PlayerCore: NSObject {
   }
 
   func clearPlaylist() {
-    mpv.command(.playlistClear)
+    mpv.asyncCommand(.playlistClear, replyUserdata: 0)
     info.isShuffled = false
     postNotification(.iinaPlaylistChanged)
   }
@@ -2558,9 +2597,9 @@ class PlayerCore: NSObject {
     postNotification(.iinaSubPositionChanged)
   }
 
-  func secondarySidChanged() {
+  func secondarySidChanged(_ secondSid: Int) {
     guard info.state.active else { return }
-    info.secondSid = Int(mpv.getInt(MPVOption.Subtitles.secondarySid))
+    info.secondSid = secondSid
     postNotification(.iinaSIDChanged)
     sendOSD(.track(info.currentTrack(.secondSub) ?? .noneSubTrack))
     if isInMiniPlayer {
@@ -2691,9 +2730,9 @@ class PlayerCore: NSObject {
     postNotification(.iinaVFChanged)
   }
 
-  func vidChanged() {
+  func vidChanged(_ vid: Int) {
     guard info.state.active else { return }
-    info.vid = Int(mpv.getInt(MPVOption.TrackSelection.vid))
+    info.vid = vid
     postNotification(.iinaVIDChanged)
     sendOSD(.track(info.currentTrack(.video) ?? .noneVideoTrack))
     if isInMiniPlayer {
@@ -3189,14 +3228,14 @@ class PlayerCore: NSObject {
     let secondSid: Int
   }
 
-  func getTrackInfo() {
-    storeTrackList(readTrackList())
-  }
-
   /// Read the track list of `mpv`. This waits for `mpv`.
   func readTrackList() -> TrackList {
+    trackList(from: mpv.getNode(MPVProperty.trackList))
+  }
+
+  /// The track list held by the given value of `mpv`'s `track-list`, read as a node.
+  private func trackList(from raw: Any?) -> TrackList {
     var tracks = TrackList()
-    let raw = mpv.getNode(MPVProperty.trackList)
     guard let list = raw as? [[String: Any]] else {
       // Internal error, should not occur.
       log("Cast of mpv node failed while getting track list: \(String(describing: raw))",
@@ -3229,10 +3268,6 @@ class PlayerCore: NSObject {
     info.audioTracks = tracks.audio
     info.videoTracks = tracks.video
     info.$subTracks.withLock { $0 = tracks.sub }
-  }
-
-  func getSelectedTracks() {
-    storeSelectedTracks(readSelectedTracks())
   }
 
   /// Read the tracks `mpv` has selected. This waits for `mpv`.
@@ -3281,6 +3316,19 @@ class PlayerCore: NSObject {
 
   func getChapters() {
     storeChapters(readChapters())
+  }
+
+  /// Rebuild the chapter list from `mpv`'s, read in one request without waiting for `mpv`, and store it on the main thread.
+  func reloadChapters() {
+    log("Reloading chapter list", level: .verbose)
+    mpv.getNodeAsync(MPVProperty.chapterList) { [self] node in
+      // A chapter's title is present only when it has one.
+      let chapters = (node as? [Any?] ?? []).enumerated().compactMap { index, entry -> MPVChapter? in
+        guard let fields = entry as? [String: Any?], let time = (fields["time"] ?? nil) as? Double else { return nil }
+        return MPVChapter(title: (fields["title"] ?? nil) as? String, startTime: time, index: index)
+      }
+      DispatchQueue.main.async { [self] in storeChapters(chapters) }
+    }
   }
 
   /// Read the chapter list of `mpv`. This waits for `mpv`.

@@ -208,6 +208,10 @@ class PlaybackInfo {
 
   var abLoopStatus: LoopStatus = .cleared
 
+  /// The values of mpv's `loop-file` and `loop-playlist` options, as mpv last reported them or as IINA asked mpv to set them since.
+  var loopFile = "no"
+  var loopPlaylist = "no"
+
   /** Selected track IDs. Use these (instead of `isSelected` of a track) to check if selected */
   @Atomic var aid: Int?
   @Atomic var sid: Int?

@@ -335,12 +335,8 @@ class PlayerWindowController: NSWindowController, NSWindowDelegate {
   }
 
   func abLoop() {
-    player.abLoop()
-    syncSlider()
-  }
-
-  func syncSlider() {
-    syncSlider(abLoopA: player.abLoopA, abLoopB: player.abLoopB)
+    // The knobs show the loop points mpv answers once it has run the command, without the main thread waiting for it.
+    player.abLoop { [weak self] a, b in self?.syncSlider(abLoopA: a, abLoopB: b) }
   }
 
   /// Show the A-B loop knobs of the play slider at the given loop points, read from `mpv`.

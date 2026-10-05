@@ -169,7 +169,7 @@ extension MainMenuActionHandler {
     guard let chapter = player.playChapter(index) else {
       Logger.log("Cannot switch to chapter \(index) because it was not found! Will ignore request and reload chapters instead",
                  subsystem: player.subsystem)
-      player.getChapters()
+      player.reloadChapters()
       return
     }
     player.sendOSD(.chapter(chapter.title))
