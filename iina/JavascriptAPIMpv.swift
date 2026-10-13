@@ -52,15 +52,16 @@ class JavascriptAPIMpv: JavascriptAPI, JavascriptAPIMpvExportable {
       return
     }
 
+    // The value is set without waiting for mpv, which handles a later read of it after the set.
     if value.isNumber {
-      player!.mpv.setDouble(property, value.toDouble())
+      player!.mpv.setDoubleAsync(property, value.toDouble())
     } else if value.isString {
-      player!.mpv.setString(property, value.toString())
+      player!.mpv.setStringAsync(property, value.toString())
     } else if value.isBoolean {
-      player!.mpv.setFlag(property, value.toBool())
+      player!.mpv.setFlagAsync(property, value.toBool())
     } else if value.isObject {
       if let object = value.toObject() {
-        player!.mpv.setNode(property, object)
+        player!.mpv.setNodeAsync(property, object)
       }
     } else {
       throwError(withMessage: "mpv.set only supports numbers, strings, booleans and objects.")
@@ -72,7 +73,7 @@ class JavascriptAPIMpv: JavascriptAPI, JavascriptAPIMpvExportable {
       throwError(withMessage: "mpv.command: \(commandName) needs the file system permission.")
       return
     }
-    player!.mpv.command(MPVCommand(commandName), args: args, checkError: false)
+    player!.mpv.asyncCommand(MPVCommand(commandName), args: args, checkError: false, replyUserdata: 0)
   }
 
   @objc func addHook(_ name: String, _ priority: Int, _ callback: JSValue) {

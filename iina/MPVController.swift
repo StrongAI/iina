@@ -109,6 +109,10 @@ class MPVController: NSObject {
   private lazy var queue = DispatchQueue(label: "com.colliderli.iina.controller",
                                          qos: .userInitiated)
 
+  /// [DispatchQueue](https://developer.apple.com/documentation/dispatch/dispatchqueue) for adding hooks, which waits for
+  /// `mpv`'s core, so that no other thread waits for it.
+  private lazy var hookQueue = DispatchQueue(label: "com.colliderli.iina.controller.hook", qos: .userInitiated)
+
   unowned let player: PlayerCore
 
   var needRecordSeekTime: Bool = false
@@ -997,6 +1001,22 @@ class MPVController: NSObject {
   /// on the thread of the queue for reading `mpv` events once `mpv` has answered every request, or on the calling thread when no
   /// request could be made, and not at all if `mpv` shuts down before replying.
   func getNodesAsync(_ names: [String], reply: @escaping ([Any?]) -> Void) {
+    getPropertiesAsync(names, format: MPV_FORMAT_NODE, reply: reply) { node in
+      try? MPVNode.parse(node.assumingMemoryBound(to: mpv_node.self).pointee)
+    }
+  }
+
+  /// Read the given properties asynchronously as strings, as `getString` reads them, without waiting for `mpv`, see `getNodesAsync`.
+  func getStringsAsync(_ names: [String], reply: @escaping ([String?]) -> Void) {
+    getPropertiesAsync(names, format: MPV_FORMAT_STRING, reply: { reply($0.map { $0 as? String }) }) { string in
+      String(cString: string.assumingMemoryBound(to: UnsafePointer<CChar>.self).pointee)
+    }
+  }
+
+  /// Read the given properties asynchronously in the given format, without waiting for `mpv`, see `getNodesAsync`.
+  /// - Parameter read: Makes the value of a property from the data `mpv` answers in `format`.
+  private func getPropertiesAsync(_ names: [String], format: mpv_format, reply: @escaping ([Any?]) -> Void,
+                                  read: @escaping (UnsafeMutableRawPointer) -> Any?) {
     guard !names.isEmpty else {
       reply([])
       return
@@ -1008,8 +1028,8 @@ class MPVController: NSObject {
       let userdata = replyCallbacks.register { error, data in
         var value: Any? = nil
         if error >= 0, let property = data?.assumingMemoryBound(to: mpv_event_property.self).pointee,
-           property.format == MPV_FORMAT_NODE, let node = property.data {
-          value = try? MPVNode.parse(node.assumingMemoryBound(to: mpv_node.self).pointee)
+           property.format == format, let data = property.data {
+          value = read(data)
         }
         let values: [Any?]? = answers.withLock { answers in
           answers.values[index] = value
@@ -1021,7 +1041,7 @@ class MPVController: NSObject {
         }
       }
       let returnValue = mpv == nil ? MPV_ERROR_UNINITIALIZED.rawValue
-        : mpv_get_property_async(mpv, userdata, name, MPV_FORMAT_NODE)
+        : mpv_get_property_async(mpv, userdata, name, format)
       if returnValue < 0 {
         replyCallbacks.take(userdata)?(returnValue, nil)
       }
@@ -1188,6 +1208,19 @@ class MPVController: NSObject {
     MPVNode.free(node)
   }
 
+  /// Set the given property asynchronously to the given value as an `mpv` node, without waiting for `mpv`, see `setFlagAsync`.
+  func setNodeAsync(_ name: String, _ value: Any) {
+    guard mpv != nil else { return }
+    guard var node = try? MPVNode.create(value) else {
+      log("setNodeAsync: cannot encode value for \(name)", level: .error)
+      return
+    }
+    log("Asynchronously set property: \(name)=<a mpv node>")
+    // mpv copies the value before this returns.
+    mpv_set_property_async(mpv, 0, name, MPV_FORMAT_NODE, &node)
+    MPVNode.free(node)
+  }
+
   /// Returns the given node map value as an `Int`.
   ///
   /// This method is intended to be used when extracting values from a `MPV_FORMAT_NODE_MAP` `mpv_node` that contains
@@ -1202,11 +1235,18 @@ class MPVController: NSObject {
 
   // MARK: - Hooks
 
+  /// Add the given hook without waiting for `mpv`. The hook is known as soon as this returns, and is added to `mpv`, which waits for
+  /// its core, on the queue for adding hooks.
   func addHook(_ name: MPVHook, priority: Int32 = 0, hook: MPVHookValue) {
-    $hooks.withLock {
-      mpv_hook_add(mpv, hookCounter, name.rawValue, priority)
-      $0[hookCounter] = hook
+    let id: UInt64 = $hooks.withLock {
+      let id = hookCounter
+      $0[id] = hook
       hookCounter += 1
+      return id
+    }
+    hookQueue.async { [self] in
+      guard mpv != nil else { return }
+      mpv_hook_add(mpv, id, name.rawValue, priority)
     }
   }
 
