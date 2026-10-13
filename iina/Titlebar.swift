@@ -50,8 +50,8 @@ class Titlebar: NSView {
   private var trailingConstraint: NSLayoutConstraint!
   private var topConstraint: NSLayoutConstraint!
   private var verticalConstraint: NSLayoutConstraint!
-  private var titleTextField: NSTextField!
-  private var docIcon: NSImageView!
+  private(set) var titleTextField: NSTextField!
+  private(set) var docIcon: NSImageView!
 
   var oscView: TimeLabelOverflowedStackView!
   private var oscContainer: NSView!
@@ -272,16 +272,19 @@ class Titlebar: NSView {
           let window = mainWindow.window else { return }
 
     let info = mainWindow.player.info
-    titleTextField.stringValue = if info.isNetworkResource {
-      mainWindow.player.getMediaTitle()
-    } else if let url = info.currentURL {
-      FileManager.default.displayName(atPath: url.path)
-    } else {
-      ""
-    }
-
+    let mediaTitle = info.isNetworkResource ? mainWindow.player.getMediaTitle() : nil
+    let path = info.currentURL?.path
     let filename = window.representedFilename
-    docIcon.image = filename.isEmpty ? nil : NSWorkspace.shared.icon(forFile: filename)
+    // The file's display name and icon are read from the file system and LaunchServices off the main thread, and shown on it. Every
+    // title goes through the same queue, so that titles are shown in the order they are asked for.
+    Utility.onWorkspaceQueue {
+      let title = mediaTitle ?? path.map { FileManager.default.displayName(atPath: $0) } ?? ""
+      let icon = filename.isEmpty ? nil : NSWorkspace.shared.icon(forFile: filename)
+      DispatchQueue.main.async {
+        titleTextField.stringValue = title
+        docIcon.image = icon
+      }
+    }
   }
 
   func setLeadingConstraint(_ constant: CGFloat, animated: Bool = true) {

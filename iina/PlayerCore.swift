@@ -275,8 +275,8 @@ class PlayerCore: NSObject {
   var abLoopA: Double {
     /// Returns the value of the A loop point, a timestamp in seconds if set, otherwise returns zero.
     /// - Note: The value of the A loop point is not required by mpv to be before the B loop point.
-    /// - Returns:value of the mpv option `ab-loop-a`
-    get { mpv.getDouble(MPVOption.PlaybackControl.abLoopA) }
+    /// - Returns:value of the mpv option `ab-loop-a` as mpv last reported it
+    get { info.abLoopA }
     /// Sets the value of the A loop point as an absolute timestamp in seconds.
     ///
     /// The loop points of the mpv A-B loop command can be adjusted at runtime. This method updates the A loop point. Setting a
@@ -295,8 +295,8 @@ class PlayerCore: NSObject {
   var abLoopB: Double {
     /// Returns the value of the B loop point, a timestamp in seconds if set, otherwise returns zero.
     /// - Note: The value of the B loop point is not required by mpv to be after the A loop point.
-    /// - Returns:value of the mpv option `ab-loop-b`
-    get { mpv.getDouble(MPVOption.PlaybackControl.abLoopB) }
+    /// - Returns:value of the mpv option `ab-loop-b` as mpv last reported it
+    get { info.abLoopB }
     /// Sets the value of the B loop point as an absolute timestamp in seconds.
     ///
     /// The loop points of the mpv A-B loop command can be adjusted at runtime. This method updates the B loop point. Setting a
@@ -312,7 +312,7 @@ class PlayerCore: NSObject {
   }
 
   var isABLoopActive: Bool {
-    abLoopA != 0 && abLoopB != 0 && mpv.getString(MPVOption.PlaybackControl.abLoopCount) != "0"
+    abLoopA != 0 && abLoopB != 0 && info.abLoopCount != "0"
   }
 
   /// Whether to only use the URL's filename when calculating the mpv
@@ -322,15 +322,23 @@ class PlayerCore: NSObject {
   /// [ignore-path-in-watch-later-config](https://mpv.io/manual/stable/#options-ignore-path-in-watch-later-config)
   /// option. As this option is only used by advanced users there is intentionally no support in IINA's UI for this option. This is also an
   /// option that you would set and not change as changing it means existing watch later files will no longer be found. For this reason
-  /// IINA does not support dynamic changes to this option. The value of this option is obtained and cached. Setting this option
-  /// requires IINA to be restarted.
-  lazy var ignorePathInWatchLaterConfig: Bool = {
-    let ignorePath = mpv.getFlag(MPVOption.WatchLater.ignorePathInWatchLaterConfig)
+  /// IINA does not support dynamic changes to this option. The value of this option is read once `mpv` is initialized, without waiting
+  /// for `mpv`, and stored when `mpv` answers, which is before it reports any file started. Setting this option requires IINA to be
+  /// restarted.
+  @Atomic var ignorePathInWatchLaterConfig = false
+
+  /// The window geometry of mpv's `geometry` option, read once `mpv` is initialized without waiting for `mpv` and stored when `mpv`
+  /// answers, which is before it reports any video size.
+  @Atomic private var configuredGeometry: GeometryDef?
+
+  /// Store the options `mpv` answered once it was initialized.
+  func storeConfiguredOptions(ignorePathInWatchLaterConfig ignorePath: Bool, geometry: String) {
     if ignorePath {
       log("Will use filename instead of path when calculating watch later MD5 sum")
     }
-    return ignorePath
-  }()
+    ignorePathInWatchLaterConfig = ignorePath
+    configuredGeometry = GeometryDef.parse(geometry)
+  }
 
   /// Whether to auto load files when opening the URL given in `pendingUrl`.
   private var pendingAutoLoad = false
@@ -2208,8 +2216,7 @@ class PlayerCore: NSObject {
   }
 
   func getGeometry() -> GeometryDef? {
-    let geometry = mpv.getString(MPVOption.Window.geometry) ?? ""
-    return GeometryDef.parse(geometry)
+    configuredGeometry
   }
 
   /// Uses an mpv `on_before_start_file` hook to honor mpv's `shuffle` command via IINA CLI.
@@ -2563,9 +2570,9 @@ class PlayerCore: NSObject {
     setAudioDevice(replacement.name)
   }
 
-  func fullscreenChanged() {
+  /// The mpv `fullscreen` option changed to the given flag, as mpv reported it in the change.
+  func fullscreenChanged(_ fs: Bool) {
     guard mainWindow.loaded, info.state.active else { return }
-    let fs = mpv.getFlag(MPVOption.Window.fullscreen)
     if fs != mainWindow.fsState.isFullscreen {
       mainWindow.toggleWindowFullScreen()
     }
@@ -2604,9 +2611,29 @@ class PlayerCore: NSObject {
     }
   }
 
-  func mediaTitleChanged() {
+  /// The mpv `media-title` property changed to the given title, as mpv reported it in the change.
+  func mediaTitleChanged(_ title: String?) {
+    info.mediaTitle = title
+    titleChanged()
+  }
+
+  /// The mpv `metadata` or `chapter-metadata` property changed to the given tags, as mpv reported them in the change.
+  func metadataChanged(_ metadata: [String: String], ofChapter: Bool) {
+    if ofChapter {
+      info.chapterMetadata = metadata
+    } else {
+      info.metadata = metadata
+    }
+    titleChanged()
+  }
+
+  /// Show the title `mpv` reported in the windows and, for the player Now Playing shows, in Now Playing.
+  private func titleChanged() {
     guard info.state.active else { return }
     postNotification(.iinaMediaTitleChanged)
+    if self === PlayerCore.lastActive {
+      NowPlayingInfoManager.shared.updateInfo(withTitle: true)
+    }
   }
 
   /// The mpv `ontop` property changed to the given flag, as mpv reported it in the change.
@@ -2865,9 +2892,9 @@ class PlayerCore: NSObject {
 
   }
 
-  func windowScaleChanged() {
+  /// The mpv `window-scale` option changed to the given scale, as mpv reported it in the change.
+  func windowScaleChanged(_ windowScale: Double) {
     guard mainWindow.loaded, info.state.active else { return }
-    let windowScale = mpv.getDouble(MPVOption.Window.windowScale)
     if fabs(windowScale - info.cachedWindowScale) > 10e-10 {
       mainWindow.setWindowScale(windowScale)
     }
@@ -3437,10 +3464,6 @@ class PlayerCore: NSObject {
     }
   }
 
-  func getChapters() {
-    storeChapters(readChapters())
-  }
-
   /// Rebuild the chapter list from `mpv`'s, read in one request without waiting for `mpv`, and store it on the main thread.
   func reloadChapters() {
     log("Reloading chapter list", level: .verbose)
@@ -3566,26 +3589,31 @@ class PlayerCore: NSObject {
     }
   }
 
+  /// The title `mpv` last reported for the media, or else its path.
   func getMediaTitle(withExtension: Bool = true) -> String {
-    let mediaTitle = mpv.getString(MPVProperty.mediaTitle)
+    let mediaTitle = info.mediaTitle
     let mediaPath = withExtension ? info.currentURL?.path : info.currentURL?.deletingPathExtension().path
     return mediaTitle ?? mediaPath ?? ""
   }
 
+  /// The title, album and artist of the media or of its current chapter, from the chapters, title and tags `mpv` last reported.
   func getMusicMetadata() -> (title: String, album: String, artist: String) {
-    if mpv.getInt(MPVProperty.chapters) > 0 {
-      let chapter = mpv.getInt(MPVProperty.chapter)
-      let chapterTitle = mpv.getString(MPVProperty.chapterListNTitle(chapter))
+    // Like mpv's by-key lookup of a tag, the key is matched ignoring case.
+    func tag(_ key: String, of tags: [String: String]) -> String? {
+      tags.first { $0.key.caseInsensitiveCompare(key) == .orderedSame }?.value
+    }
+    if !info.chapters.isEmpty {
+      let chapterTitle = info.chapters.indices.contains(info.chapter) ? info.chapters[info.chapter].privTitle : nil
       return (
-        chapterTitle ?? mpv.getString(MPVProperty.mediaTitle) ?? "",
-        mpv.getString("metadata/by-key/album") ?? "",
-        mpv.getString("chapter-metadata/by-key/performer") ?? mpv.getString("metadata/by-key/artist") ?? ""
+        chapterTitle ?? info.mediaTitle ?? "",
+        tag("album", of: info.metadata) ?? "",
+        tag("performer", of: info.chapterMetadata) ?? tag("artist", of: info.metadata) ?? ""
       )
     } else {
       return (
-        mpv.getString(MPVProperty.mediaTitle) ?? "",
-        mpv.getString("metadata/by-key/album") ?? "",
-        mpv.getString("metadata/by-key/artist") ?? ""
+        info.mediaTitle ?? "",
+        tag("album", of: info.metadata) ?? "",
+        tag("artist", of: info.metadata) ?? ""
       )
     }
   }

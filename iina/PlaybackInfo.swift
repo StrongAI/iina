@@ -216,6 +216,17 @@ class PlaybackInfo {
 
   var abLoopStatus: LoopStatus = .cleared
 
+  /// The values of mpv's `ab-loop-a`, `ab-loop-b` and `ab-loop-count` options, as mpv last reported them. A loop point mpv reports
+  /// as not set is zero.
+  var abLoopA: Double = 0
+  var abLoopB: Double = 0
+  var abLoopCount = "inf"
+
+  /// The values of mpv's `media-title`, `metadata` and `chapter-metadata` properties, as mpv last reported them.
+  @Atomic var mediaTitle: String?
+  var metadata: [String: String] = [:]
+  var chapterMetadata: [String: String] = [:]
+
   /// The values of mpv's `loop-file` and `loop-playlist` options, as mpv last reported them or as IINA asked mpv to set them since.
   var loopFile = "no"
   var loopPlaylist = "no"

@@ -90,7 +90,7 @@ class JavascriptAPICore: JavascriptAPI, JavascriptAPICoreExportable {
   }
 
   func getChapters() -> [[String: Any]] {
-    player!.getChapters()
+    // The chapters mpv last reported, so that the script does not wait for mpv.
     return player!.info.chapters.map{
       ["title": $0.title, "start": $0.time.second]
     }

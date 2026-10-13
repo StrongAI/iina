@@ -139,6 +139,9 @@ class MPVController: NSObject {
     MPVOption.PlaybackControl.pause: MPV_FORMAT_FLAG,
     MPVOption.PlaybackControl.loopPlaylist: MPV_FORMAT_STRING,
     MPVOption.PlaybackControl.loopFile: MPV_FORMAT_STRING,
+    MPVOption.PlaybackControl.abLoopA: MPV_FORMAT_DOUBLE,
+    MPVOption.PlaybackControl.abLoopB: MPV_FORMAT_DOUBLE,
+    MPVOption.PlaybackControl.abLoopCount: MPV_FORMAT_STRING,
     MPVProperty.chapter: MPV_FORMAT_INT64,
     MPVOption.Video.deinterlace: MPV_FORMAT_FLAG,
     MPVOption.Video.hwdec: MPV_FORMAT_STRING,
@@ -163,6 +166,8 @@ class MPVController: NSObject {
     MPVOption.Window.ontop: MPV_FORMAT_FLAG,
     MPVOption.Window.windowScale: MPV_FORMAT_DOUBLE,
     MPVProperty.mediaTitle: MPV_FORMAT_STRING,
+    MPVProperty.metadata: MPV_FORMAT_NODE,
+    MPVProperty.chapterMetadata: MPV_FORMAT_NODE,
     MPVProperty.videoParamsRotate: MPV_FORMAT_INT64,
     MPVProperty.videoParamsPrimaries: MPV_FORMAT_STRING,
     MPVProperty.videoParamsGamma: MPV_FORMAT_STRING,
@@ -664,6 +669,13 @@ class MPVController: NSObject {
     if let watchLaterOptions = getString(MPVOption.WatchLater.watchLaterOptions) {
       let sorted = watchLaterOptions.components(separatedBy: ",").sorted().joined(separator: ",")
       log("Options mpv is configured to save in watch later files: \(sorted)")
+    }
+
+    // Options the player reads once, asked for without waiting. mpv answers requests in the order they are made, so it answers these
+    // before it reports any file started.
+    getNodesAsync([MPVOption.WatchLater.ignorePathInWatchLaterConfig, MPVOption.Window.geometry]) { [self] values in
+      player.storeConfiguredOptions(ignorePathInWatchLaterConfig: values[0] as? Bool ?? false,
+                                    geometry: values[1] as? String ?? "")
     }
 
     // Must be called after mpv_initialize which sets the default value for hwdec-codecs.
@@ -1467,6 +1479,25 @@ class MPVController: NSObject {
       let chapter = UnsafePointer<Int>(OpaquePointer(property.data))?.pointee ?? 0
       DispatchQueue.main.async { self.player.chapterChanged(chapter) }
 
+    case MPVOption.PlaybackControl.abLoopA, MPVOption.PlaybackControl.abLoopB:
+      // A loop point mpv reports as not set, which it gives as no number, is zero, as a read of the option as a number gives.
+      let point = property.format == MPV_FORMAT_DOUBLE ? UnsafePointer<Double>(OpaquePointer(property.data))?.pointee ?? 0 : 0
+      DispatchQueue.main.async { [self] in
+        if name == MPVOption.PlaybackControl.abLoopA {
+          player.info.abLoopA = point
+        } else {
+          player.info.abLoopB = point
+        }
+      }
+
+    case MPVOption.PlaybackControl.abLoopCount:
+      guard property.format == MPV_FORMAT_STRING, let data = property.data else {
+        logPropertyValueError(name, property.format)
+        break
+      }
+      let count = String(cString: data.assumingMemoryBound(to: UnsafePointer<CChar>.self).pointee)
+      DispatchQueue.main.async { self.player.info.abLoopCount = count }
+
     case MPVOption.PlaybackControl.speed:
       guard let speed = UnsafePointer<Double>(OpaquePointer(property.data))?.pointee else {
         logPropertyValueError(MPVOption.PlaybackControl.speed, property.format)
@@ -1675,7 +1706,9 @@ class MPVController: NSObject {
       DispatchQueue.main.async { self.player.afChanged() }
 
     case MPVOption.Window.fullscreen:
-      DispatchQueue.main.async { self.player.fullscreenChanged() }
+      // The full screen flag mpv reports, false when it reports none, as a read of the option would give.
+      let fullscreen = UnsafePointer<Bool>(OpaquePointer(property.data))?.pointee ?? false
+      DispatchQueue.main.async { self.player.fullscreenChanged(fullscreen) }
 
     case MPVOption.Window.ontop:
       // The on-top flag mpv reports, false when it reports none, as a read of the property would give.
@@ -1683,10 +1716,25 @@ class MPVController: NSObject {
       DispatchQueue.main.async { self.player.ontopChanged(ontop) }
 
     case MPVOption.Window.windowScale:
-      DispatchQueue.main.async { self.player.windowScaleChanged() }
+      guard let windowScale = UnsafePointer<Double>(OpaquePointer(property.data))?.pointee else {
+        logPropertyValueError(MPVOption.Window.windowScale, property.format)
+        break
+      }
+      DispatchQueue.main.async { self.player.windowScaleChanged(windowScale) }
 
     case MPVProperty.mediaTitle:
-      DispatchQueue.main.async { self.player.mediaTitleChanged() }
+      // The title mpv reports, none when it reports no value, as a read of the property would give.
+      let mediaTitle = property.format == MPV_FORMAT_STRING
+        ? property.data.map { String(cString: $0.assumingMemoryBound(to: UnsafePointer<UInt8>.self).pointee) } : nil
+      DispatchQueue.main.async { self.player.mediaTitleChanged(mediaTitle) }
+
+    case MPVProperty.metadata, MPVProperty.chapterMetadata:
+      // The tags mpv reports, none when it reports no value, as a read of the property would give.
+      var tags: [String: String] = [:]
+      if property.format == MPV_FORMAT_NODE, let node = property.data?.assumingMemoryBound(to: mpv_node.self).pointee {
+        tags = (try? MPVNode.parse(node)) as? [String: String] ?? [:]
+      }
+      DispatchQueue.main.async { self.player.metadataChanged(tags, ofChapter: name == MPVProperty.chapterMetadata) }
 
     case MPVProperty.idleActive:
       guard let idleActive = UnsafePointer<Bool>(OpaquePointer(property.data))?.pointee else {
