@@ -65,16 +65,13 @@ class PrefUtilsViewController: PreferenceViewController, PreferenceWindowEmbedda
 
     Logger.log("Setting this app as default")
 
-    var successCount = 0
-    var failedCount = 0
-
     let utiChecked = [
       "public.movie": setAsDefaultVideoCheckBox.state == .on,
       "public.audio": setAsDefaultAudioCheckBox.state == .on,
       "public.text": setAsDefaultPlaylistCheckBox.state == .on
     ]
 
-    var utiTargetSet: Set<String> = []
+    var targetExts: [String] = []
     for utiImportedType in utiImportedTypes {
       guard
         let identifier = utiImportedType["UTTypeIdentifier"] as? String,
@@ -91,27 +88,36 @@ class PrefUtilsViewController: PreferenceViewController, PreferenceWindowEmbedda
       }
 
       Logger.log("UTImportedType: \(identifier.quoted) ➤ \(exts)", level: .verbose)
-      for ext in exts {
+      targetExts += exts
+    }
+
+    // The content types are looked up and set on the workspace queue, so that the main thread does not wait for LaunchServices.
+    let sheetWindow = view.window
+    Utility.onWorkspaceQueue {
+      var utiTargetSet: Set<String> = []
+      for ext in targetExts {
         let uttypesForExt = UTType.types(tag: ext, tagClass: .filenameExtension, conformingTo: nil)
         for uttype in uttypesForExt {
           utiTargetSet.insert(uttype.identifier)
         }
       }
-    }
 
-    for identifier in utiTargetSet {
-      Logger.log("Setting default for UTI: \(identifier.quoted)", level: .verbose)
-      let status = LSSetDefaultRoleHandlerForContentType(identifier as CFString, .all, cfBundleID)
-      if status == kOSReturnSuccess {
-        successCount += 1
-      } else {
-        Logger.log("Failed for \(identifier.quoted): return value \(status)", level: .error)
-        failedCount += 1
+      var successCount = 0
+      var failedCount = 0
+      for identifier in utiTargetSet {
+        Logger.log("Setting default for UTI: \(identifier.quoted)", level: .verbose)
+        if Utility.makeWorkspaceRequest(.setDefaultApp(contentType: identifier, bundleID: cfBundleID as String)) {
+          successCount += 1
+        } else {
+          failedCount += 1
+        }
+      }
+
+      DispatchQueue.main.async {
+        Utility.showAlert("set_default.success", arguments: [successCount, failedCount], style: .informational,
+                          sheetWindow: sheetWindow)
       }
     }
-
-    Utility.showAlert("set_default.success", arguments: [successCount, failedCount], style: .informational,
-                      sheetWindow: view.window)
     view.window!.endSheet(setAsDefaultSheet)
   }
 
@@ -158,10 +164,10 @@ class PrefUtilsViewController: PreferenceViewController, PreferenceWindowEmbedda
   }
 
   @IBAction func extChromeBtnAction(_ sender: Any) {
-    NSWorkspace.shared.open(URL(string: AppData.chromeExtensionLink)!)
+    Utility.open(URL(string: AppData.chromeExtensionLink)!)
   }
 
   @IBAction func extFirefoxBtnAction(_ sender: Any) {
-    NSWorkspace.shared.open(URL(string: AppData.firefoxExtensionLink)!)
+    Utility.open(URL(string: AppData.firefoxExtensionLink)!)
   }
 }

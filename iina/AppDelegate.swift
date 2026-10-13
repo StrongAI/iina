@@ -1020,7 +1020,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, SPUUpdaterDelegate {
     let screenshotPath = Preference.string(for: .screenshotFolder)!
     let absoluteScreenshotPath = NSString(string: screenshotPath).expandingTildeInPath
     let url = URL(fileURLWithPath: absoluteScreenshotPath, isDirectory: true)
-      NSWorkspace.shared.open(url)
+    Utility.open(url)
   }
 
   @IBAction func menuSelectAudioDevice(_ sender: NSMenuItem) {
@@ -1071,15 +1071,15 @@ class AppDelegate: NSObject, NSApplicationDelegate, SPUUpdaterDelegate {
   }
 
   @IBAction func helpAction(_ sender: AnyObject) {
-    NSWorkspace.shared.open(URL(string: AppData.wikiLink)!)
+    Utility.open(URL(string: AppData.wikiLink)!)
   }
 
   @IBAction func githubAction(_ sender: AnyObject) {
-    NSWorkspace.shared.open(URL(string: AppData.githubLink)!)
+    Utility.open(URL(string: AppData.githubLink)!)
   }
 
   @IBAction func websiteAction(_ sender: AnyObject) {
-    NSWorkspace.shared.open(URL(string: AppData.websiteLink)!)
+    Utility.open(URL(string: AppData.websiteLink)!)
   }
 
   @objc func reloadAllPlugins(_ sender: NSMenuItem) {

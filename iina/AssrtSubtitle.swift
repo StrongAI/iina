@@ -165,7 +165,7 @@ class Assrt {
       let result = alert.runModal()
       if result == .alertFirstButtonReturn {
         // if user chose register
-        NSWorkspace.shared.open(URL(string: AppData.assrtRegisterLink)!)
+        Utility.open(URL(string: AppData.assrtRegisterLink)!)
         var newToken = ""
         if Utility.quickPromptPanel("assrt_token_prompt", callback: { newToken = $0 }) {
           if newToken.count == 32 {

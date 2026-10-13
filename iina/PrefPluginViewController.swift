@@ -331,13 +331,13 @@ class PrefPluginViewController: PreferenceViewController, PreferenceWindowEmbedd
 
   @IBAction func websiteBtnAction(_ sender: NSButton) {
     if let website = currentPlugin?.authorURL, let url = URL(string: website) {
-      NSWorkspace.shared.open(url)
+      Utility.open(url)
     }
   }
 
   @IBAction func emailBtnAction(_ sender: NSButton) {
     if let email = currentPlugin?.authorEmail, let url = URL(string: "mailto:\(email)") {
-      NSWorkspace.shared.open(url)
+      Utility.open(url)
     }
   }
 
@@ -426,7 +426,7 @@ class PrefPluginViewController: PreferenceViewController, PreferenceWindowEmbedd
 
   @IBAction func showPlugin(_ sender: Any) {
     guard let currentPlugin = currentPlugin else { return }
-    NSWorkspace.shared.activateFileViewerSelecting([currentPlugin.root])
+    Utility.revealInFinder([currentPlugin.root])
   }
 
   @IBAction func checkForPluginUpdate(_ sender: Any) {

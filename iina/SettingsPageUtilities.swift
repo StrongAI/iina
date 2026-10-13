@@ -151,7 +151,7 @@ fileprivate func makeLabel() -> NSTextField {
   return tf
 }
 
-fileprivate class SetAsDefaultSheetWindow: NSWindow {
+class SetAsDefaultSheetWindow: NSWindow {
   var contextWindow: NSWindow!
 
   private let label: NSTextField
@@ -214,16 +214,13 @@ fileprivate class SetAsDefaultSheetWindow: NSWindow {
 
     Logger.log("Setting this app as default")
 
-    var successCount = 0
-    var failedCount = 0
-
     let utiChecked = [
       "public.movie": videoCheckBox.state == .on,
       "public.audio": audioCheckBox.state == .on,
       "public.text": playListCheckBox.state == .on
     ]
 
-    var utiTargetSet: Set<String> = []
+    var targetExts: [String] = []
     for utiImportedType in utiImportedTypes {
       guard
         let identifier = utiImportedType["UTTypeIdentifier"] as? String,
@@ -240,27 +237,35 @@ fileprivate class SetAsDefaultSheetWindow: NSWindow {
       }
 
       Logger.log("UTImportedType: \(identifier.quoted) ➤ \(exts)", level: .verbose)
-      for ext in exts {
+      targetExts += exts
+    }
+
+    // The content types are looked up and set on the workspace queue, so that the main thread does not wait for LaunchServices.
+    Utility.onWorkspaceQueue {
+      var utiTargetSet: Set<String> = []
+      for ext in targetExts {
         let uttypesForExt = UTType.types(tag: ext, tagClass: .filenameExtension, conformingTo: nil)
         for uttype in uttypesForExt {
           utiTargetSet.insert(uttype.identifier)
         }
       }
-    }
 
-    for identifier in utiTargetSet {
-      Logger.log("Setting default for UTI: \(identifier.quoted)", level: .verbose)
-      let status = LSSetDefaultRoleHandlerForContentType(identifier as CFString, .all, cfBundleID)
-      if status == kOSReturnSuccess {
-        successCount += 1
-      } else {
-        Logger.log("Failed for \(identifier.quoted): return value \(status)", level: .error)
-        failedCount += 1
+      var successCount = 0
+      var failedCount = 0
+      for identifier in utiTargetSet {
+        Logger.log("Setting default for UTI: \(identifier.quoted)", level: .verbose)
+        if Utility.makeWorkspaceRequest(.setDefaultApp(contentType: identifier, bundleID: cfBundleID as String)) {
+          successCount += 1
+        } else {
+          failedCount += 1
+        }
+      }
+
+      DispatchQueue.main.async {
+        Utility.showAlert("set_default.success", arguments: [successCount, failedCount], style: .informational,
+                          sheetWindow: window)
       }
     }
-
-    Utility.showAlert("set_default.success", arguments: [successCount, failedCount], style: .informational,
-                      sheetWindow: window)
     window.endSheet(self)
   }
 
@@ -270,7 +275,7 @@ fileprivate class SetAsDefaultSheetWindow: NSWindow {
   }
 }
 
-fileprivate class BrowserExtensionView: SettingsAccessory.Base {
+class BrowserExtensionView: SettingsAccessory.Base {
   func linkButton(_ key: SettingsLocalization.Key, _ selector: Selector, _ symbolName: [String] = []) -> NSButton {
     let button = ui.button(key)
     button.image = .sf(symbolName + ["square.and.arrow.down"])
@@ -292,11 +297,11 @@ fileprivate class BrowserExtensionView: SettingsAccessory.Base {
   }
 
   @objc func extChromeBtnAction(_ sender: Any) {
-    NSWorkspace.shared.open([URL(string: AppData.chromeExtensionLink)!], withApplicationAt: NSWorkspace.shared.urlForApplication(withBundleIdentifier: "com.google.Chrome") ?? NSWorkspace.shared.urlForApplication(toOpen: URL(string: "http://")!)!, configuration: NSWorkspace.OpenConfiguration())
+    Utility.open(URL(string: AppData.chromeExtensionLink)!, inApp: "com.google.Chrome")
   }
 
   @objc func extFirefoxBtnAction(_ sender: Any) {
-    NSWorkspace.shared.open([URL(string: AppData.firefoxExtensionLink)!], withApplicationAt: NSWorkspace.shared.urlForApplication(withBundleIdentifier: "org.mozilla.firefox") ?? NSWorkspace.shared.urlForApplication(toOpen: URL(string: "http://")!)!, configuration: NSWorkspace.OpenConfiguration())
+    Utility.open(URL(string: AppData.firefoxExtensionLink)!, inApp: "org.mozilla.firefox")
   }
 
   @objc func extSafariBtnAction() {

@@ -56,7 +56,7 @@ class GuideWindowController: NSWindowController {
   }
 
   @IBAction func visitIINAWebsite(_ sender: Any) {
-    NSWorkspace.shared.open(URL(string: AppData.websiteLink)!)
+    Utility.open(URL(string: AppData.websiteLink)!)
   }
 }
 
@@ -67,7 +67,7 @@ extension GuideWindowController: WKNavigationDelegate {
         decisionHandler(.allow)
         return
       } else {
-        NSWorkspace.shared.open(url)
+        Utility.open(url)
       }
     }
     decisionHandler(.cancel)

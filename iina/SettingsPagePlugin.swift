@@ -215,7 +215,7 @@ fileprivate extension NSPasteboard.PasteboardType {
 }
 
 
-fileprivate class PluginListView: SettingsAccessory.Base {
+class PluginListView: SettingsAccessory.Base {
   // TODO: this is a workaround.
   // SettingsItem.Custom should also adopt the "build first, render later" design.
   class TableView: NSTableView {
@@ -523,12 +523,12 @@ extension PluginListView {
 
   @objc func showPluginInFinderAction(_ sender: Any) {
     guard let currentPlugin = PluginListView.currentPlugin else { return }
-    NSWorkspace.shared.activateFileViewerSelecting([currentPlugin.root])
+    Utility.revealInFinder([currentPlugin.root])
   }
 }
 
 
-fileprivate class PluginDetailsWindow: NSWindow {
+class PluginDetailsWindow: NSWindow {
   private unowned let plugin: JavascriptPlugin
   private let okButton: NSButton
   private var webView: WKWebView!
@@ -776,7 +776,7 @@ extension PluginDetailsWindow: WKScriptMessageHandler, WKNavigationDelegate {
       }
       // open external page
       if let scheme = url.scheme?.lowercased(), scheme == "https" {
-        NSWorkspace.shared.open(url)
+        Utility.open(url)
         decisionHandler(.cancel)
         return
       }

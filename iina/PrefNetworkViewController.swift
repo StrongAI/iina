@@ -60,7 +60,7 @@ class PrefNetworkViewController: PreferenceViewController, PreferenceWindowEmbed
   }
 
   @IBAction func ytdlHelpAction(_ sender: Any) {
-    NSWorkspace.shared.open(URL(string: AppData.ytdlHelpLink)!)
+    Utility.open(URL(string: AppData.ytdlHelpLink)!)
   }
 
 }

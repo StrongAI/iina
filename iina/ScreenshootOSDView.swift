@@ -52,13 +52,13 @@ class ScreenshootOSDView: NSViewController {
 
   @IBAction func revealBtnAction(_ sender: Any) {
     guard let fileURL else { return }
-    NSWorkspace.shared.activateFileViewerSelecting([fileURL])
+    Utility.revealInFinder([fileURL])
     PlayerCore.active.hideOSD()
   }
 
   @IBAction func editBtnAction(_ sender: Any) {
     guard let fileURL else { return }
-    NSWorkspace.shared.open(fileURL)
+    Utility.open(fileURL)
     PlayerCore.active.hideOSD()
   }
 }

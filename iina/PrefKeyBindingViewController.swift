@@ -204,8 +204,7 @@ class PrefKeyBindingViewController: PreferenceViewController, PreferenceWindowEm
   }
 
   @IBAction func showConfFileAction(_ sender: AnyObject) {
-    let url = URL(fileURLWithPath: currentConfFilePath)
-    NSWorkspace.shared.activateFileViewerSelecting([url])
+    Utility.revealInFinder(filesAtPaths: [currentConfFilePath])
   }
 
   @IBAction func deleteConfFileAction(_ sender: AnyObject) {
@@ -240,7 +239,7 @@ class PrefKeyBindingViewController: PreferenceViewController, PreferenceWindowEm
   }
 
   @IBAction func openKeyBindingsHelpAction(_ sender: AnyObject) {
-    NSWorkspace.shared.open(URL(string: AppData.wikiLink.appending("/Manage-Key-Bindings"))!)
+    Utility.open(URL(string: AppData.wikiLink.appending("/Manage-Key-Bindings"))!)
   }
 
   // MARK: - UI

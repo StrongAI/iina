@@ -573,16 +573,16 @@ extension SidebarPlaylistPane: NSMenuDelegate, NSMenuItemValidation {
 
   @IBAction func contextMenuShowInFinder(_ sender: NSMenuItem) {
     guard let selectedRows else { return }
-    var urls: [URL] = []
+    var paths: [String] = []
     player.info.$playlist.withLock { playlist in
       for index in selectedRows {
         if !playlist[index].isNetworkResource {
-          urls.append(URL(fileURLWithPath: playlist[index].filename))
+          paths.append(playlist[index].filename)
         }
       }
     }
     tableView.deselectAll(nil)
-    NSWorkspace.shared.activateFileViewerSelecting(urls)
+    Utility.revealInFinder(filesAtPaths: paths)
   }
 
   @IBAction func contextMenuAddSubtitle(_ sender: NSMenuItem) {
@@ -612,7 +612,7 @@ extension SidebarPlaylistPane: NSMenuDelegate, NSMenuItemValidation {
     selectedRows.forEach { i in
       let info = player.info.playlist[i]
       if info.isNetworkResource, let url = URL(string: info.filename) {
-        NSWorkspace.shared.open(url)
+        Utility.open(url)
       }
     }
   }

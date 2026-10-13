@@ -237,7 +237,7 @@ class JavascriptAPIUtils: JavascriptAPI, JavascriptAPIUtilsExportable {
     // always open web links
     if let url = URL(string: url) {
       if url.scheme == "https" || url.scheme == "http" {
-        NSWorkspace.shared.open(url)
+        Utility.open(url)
         return true
       }
     }
@@ -247,13 +247,12 @@ class JavascriptAPIUtils: JavascriptAPI, JavascriptAPIUtilsExportable {
       log("utils.open: path cannot be found", level: .error)
       return false
     }
-    let fileURL = URL(fileURLWithPath: path)
     if isLocal {
-      NSWorkspace.shared.open(fileURL)
+      Utility.open(fileAtPath: path)
       return true
     }
     return whenPermitted(to: .accessFileSystem) {
-      NSWorkspace.shared.open(fileURL)
+      Utility.open(fileAtPath: path)
       return true
     } ?? false
   }

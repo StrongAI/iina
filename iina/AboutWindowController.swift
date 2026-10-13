@@ -127,7 +127,7 @@ class AboutWindowController: NSWindowController {
 
   @objc func openCommitLink() {
     guard let commitSHA = InfoDictionary.shared.buildCommit else { return }
-    NSWorkspace.shared.open(.init(string: "https://github.com/iina/iina/commit/\(commitSHA)")!)
+    Utility.open(.init(string: "https://github.com/iina/iina/commit/\(commitSHA)")!)
   }
 
   @IBAction func sectionBtnAction(_ sender: NSButton) {
@@ -139,11 +139,11 @@ class AboutWindowController: NSWindowController {
   }
 
   @IBAction func contributorsBtnAction(_ sender: Any) {
-    NSWorkspace.shared.open(URL(string: AppData.contributorsLink)!)
+    Utility.open(URL(string: AppData.contributorsLink)!)
   }
 
   @IBAction func translatorsBtnAction(_ sender: Any) {
-    NSWorkspace.shared.open(URL(string: AppData.crowdinMembersLink)!)
+    Utility.open(URL(string: AppData.crowdinMembersLink)!)
   }
 }
 

@@ -226,7 +226,7 @@ class PrefUIViewController: PreferenceViewController, PreferenceWindowEmbeddable
   }
 
   @IBAction func disableAnimationsHelpAction(_ sender: Any) {
-    NSWorkspace.shared.open(URL(string: AppData.disableAnimationsHelpLink)!)
+    Utility.open(URL(string: AppData.disableAnimationsHelpLink)!)
   }
 }
 

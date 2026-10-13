@@ -133,7 +133,7 @@ class JavascriptAPIFile: JavascriptAPI, JavascriptAPIFileExportable {
   func showInFinder(_ path: String) {
     guard let filePath = parsePath(path).path else { return }
 
-    NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: filePath)])
+    Utility.revealInFinder(filesAtPaths: [filePath])
   }
 
   func handle(_ path: String, _ mode: String) -> JavascriptFileHandle? {

@@ -69,7 +69,7 @@ private extension NSUserInterfaceItemIdentifier {
 }
 
 
-fileprivate class ConfigEditor: SettingsAccessory.Base {
+class ConfigEditor: SettingsAccessory.Base {
   fileprivate typealias KC = PrefKeyBindingViewController
 
   private let prefObserver = Preference.Observer()
@@ -358,8 +358,7 @@ fileprivate class ConfigEditor: SettingsAccessory.Base {
   }
 
   @objc func showConfFileAction(_ sender: AnyObject) {
-    let url = URL(fileURLWithPath: currentConfFilePath)
-    NSWorkspace.shared.activateFileViewerSelecting([url])
+    Utility.revealInFinder(filesAtPaths: [currentConfFilePath])
   }
 
   @objc func deleteConfFileAction(_ sender: AnyObject) {
@@ -602,7 +601,7 @@ fileprivate class KeyMappingCell: NSTableCellView {
 }
 
 
-fileprivate class ButtonWithObject : NSButton {
+class ButtonWithObject : NSButton {
   weak var object: KeyMapping?
 }
 

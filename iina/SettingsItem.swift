@@ -466,7 +466,7 @@ struct SettingsItem {
 
     @objc private func openHelpLink(_ sender: NSButton!) {
       if let link = helpLink, let url = URL(string: link) {
-        NSWorkspace.shared.open(url)
+        Utility.open(url)
       }
     }
 

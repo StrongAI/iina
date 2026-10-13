@@ -48,7 +48,7 @@ class MainMenuActionHandler: NSResponder, NSMenuItemValidation {
 
   @objc func menuShowCurrentFileInFinder(_ sender: NSMenuItem) {
     guard let url = player.info.currentURL, !player.info.isNetworkResource else { return }
-    NSWorkspace.shared.activateFileViewerSelecting([url])
+    Utility.revealInFinder([url])
   }
 
   @objc func menuDeleteCurrentFile(_ sender: NSMenuItem) {

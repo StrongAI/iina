@@ -516,8 +516,10 @@ class HistoryWindowController: NSWindowController, NSOutlineViewDelegate, NSOutl
   }
 
   @objc func showInFinderAction(_ sender: Any?) {
-    guard !selectedFiles.isEmpty else { return }
-    NSWorkspace.shared.activateFileViewerSelecting(selectedFiles)
+    // Which of the files exist is read on the queue that shows them, so that the main thread does not wait for the file system.
+    let urls = selectedEntries.map { $0.url }
+    guard !urls.isEmpty else { return }
+    Utility.revealInFinder(urls, onlyExisting: true)
   }
 
   @objc func deleteAction(_ sender: Any?) {

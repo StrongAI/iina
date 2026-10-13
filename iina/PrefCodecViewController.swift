@@ -194,26 +194,26 @@ class PrefCodecViewController: PreferenceViewController, PreferenceWindowEmbedda
   }
 
   @IBAction func toneMappingHelpAction(_ sender: Any) {
-    NSWorkspace.shared.open(URL(string: AppData.toneMappingHelpLink)!)
+    Utility.open(URL(string: AppData.toneMappingHelpLink)!)
   }
 
   @IBAction func targetPeakHelpAction(_ sender: Any) {
-    NSWorkspace.shared.open(URL(string: AppData.mpvManualLink.appending("/#options-target-peak"))!)
+    Utility.open(URL(string: AppData.mpvManualLink.appending("/#options-target-peak"))!)
   }
 
   @IBAction func algorithmHelpAction(_ sender: Any) {
-    NSWorkspace.shared.open(URL(string: AppData.mpvManualLink.appending("/#options-tone-mapping"))!)
+    Utility.open(URL(string: AppData.mpvManualLink.appending("/#options-tone-mapping"))!)
   }
 
   @IBAction func gainAdjustmentHelpAction(_ sender: Any) {
-    NSWorkspace.shared.open(URL(string: AppData.mpvManualLink.appending("/#options-replaygain"))!)
+    Utility.open(URL(string: AppData.mpvManualLink.appending("/#options-replaygain"))!)
   }
 
   @IBAction func gaplessAudioHelpAction(_ sender: Any) {
-    NSWorkspace.shared.open(URL(string: AppData.mpvManualLink.appending("/#options-gapless-audio"))!)
+    Utility.open(URL(string: AppData.mpvManualLink.appending("/#options-gapless-audio"))!)
   }
 
   @IBAction func audioDriverHelpAction(_ sender: Any) {
-    NSWorkspace.shared.open(URL(string: AppData.mpvManualLink.appending("/#audio-output-drivers-coreaudio"))!)
+    Utility.open(URL(string: AppData.mpvManualLink.appending("/#audio-output-drivers-coreaudio"))!)
   }
 }

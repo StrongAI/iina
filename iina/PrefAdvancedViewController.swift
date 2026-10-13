@@ -73,7 +73,7 @@ class PrefAdvancedViewController: PreferenceViewController, PreferenceWindowEmbe
   // MARK: - IBAction
 
   @IBAction func openLogDir(_ sender: AnyObject) {
-    NSWorkspace.shared.open(Logger.logDirectory)
+    Utility.open(Logger.logDirectory)
   }
   
   @IBAction func showLogWindow(_ sender: AnyObject) {
@@ -103,7 +103,7 @@ class PrefAdvancedViewController: PreferenceViewController, PreferenceWindowEmbe
   }
 
   @IBAction func helpBtnAction(_ sender: AnyObject) {
-    NSWorkspace.shared.open(URL(string: AppData.wikiLink)!.appendingPathComponent("MPV-Options-and-Properties"))
+    Utility.open(URL(string: AppData.wikiLink)!.appendingPathComponent("MPV-Options-and-Properties"))
   }
 }
 

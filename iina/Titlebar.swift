@@ -356,7 +356,7 @@ class Titlebar: NSView {
 
   @objc private func revealInFinder(_ sender: NSMenuItem) {
     guard let url = sender.representedObject as? URL else { return }
-    NSWorkspace.shared.selectFile(nil, inFileViewerRootedAtPath: url.path)
+    Utility.showFolderInFinder(url.path)
   }
 
   private func updateShadow() {

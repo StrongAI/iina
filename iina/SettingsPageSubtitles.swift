@@ -459,7 +459,7 @@ fileprivate class SubtitlesEncodingView: SettingsAccessory.Base {
 }
 
 
-fileprivate class SubtitleSourceView: SettingsAccessory.Base {
+class SubtitleSourceView: SettingsAccessory.Base {
   var subSourceStackView: NSStackView!
   let subSourcePopUpButton: NSPopUpButton
   let loginIndicator: NSProgressIndicator
@@ -508,7 +508,7 @@ fileprivate class SubtitleSourceView: SettingsAccessory.Base {
   }
 
   @objc private func assrtHelpBtnAction(_ sender: AnyObject) {
-    NSWorkspace.shared.open(URL(string: AppData.wikiLink.appending("/Download-Online-Subtitles#assrt"))!)
+    Utility.open(URL(string: AppData.wikiLink.appending("/Download-Online-Subtitles#assrt"))!)
   }
 
   private func refreshSubSources() {

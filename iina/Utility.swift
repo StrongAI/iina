@@ -496,6 +496,101 @@ class Utility {
   static let exeDirURL: URL = URL(fileURLWithPath: Bundle.main.executablePath!).deletingLastPathComponent()
 
 
+  // MARK: - LaunchServices
+
+  /// A request of LaunchServices, which can wait for an app to be looked up, launched or asked, so it is made on `workspaceQueue`.
+  enum WorkspaceRequest: Hashable {
+    /// Open the URL in its default app.
+    case open(URL)
+    /// Open the URL in the app with the bundle identifier, or in the default web browser when that app is not installed.
+    case openInApp(URL, bundleID: String)
+    /// Show the files in Finder, selected.
+    case revealInFinder([URL])
+    /// Show the folder at the path in a Finder window.
+    case showFolderInFinder(String)
+    /// Make the app with the bundle identifier the default app of the content type.
+    case setDefaultApp(contentType: String, bundleID: String)
+
+    /// Make the request of LaunchServices.
+    /// - Returns: Whether LaunchServices did what was asked.
+    func make() -> Bool {
+      let workspace = NSWorkspace.shared
+      switch self {
+      case .open(let url):
+        return workspace.open(url)
+      case .openInApp(let url, let bundleID):
+        guard let app = workspace.urlForApplication(withBundleIdentifier: bundleID)
+                ?? workspace.urlForApplication(toOpen: URL(string: "http://")!) else { return false }
+        workspace.open([url], withApplicationAt: app, configuration: NSWorkspace.OpenConfiguration())
+        return true
+      case .revealInFinder(let urls):
+        workspace.activateFileViewerSelecting(urls)
+        return true
+      case .showFolderInFinder(let path):
+        return workspace.selectFile(nil, inFileViewerRootedAtPath: path)
+      case .setDefaultApp(let contentType, let bundleID):
+        let status = LSSetDefaultRoleHandlerForContentType(contentType as CFString, .all, bundleID as CFString)
+        guard status == kOSReturnSuccess else {
+          Logger.log("Failed for \(contentType.quoted): return value \(status)", level: .error)
+          return false
+        }
+        return true
+      }
+    }
+  }
+
+  /// The serial queue the LaunchServices requests are made on, so that the main thread does not wait for them.
+  static let workspaceQueue = DispatchQueue(label: "IINAWorkspace", qos: .userInitiated)
+
+  /// Makes each LaunchServices request. It exists so that tests can record the requests in its place, checking what is asked without
+  /// opening a browser, a Finder window or another app, or changing the default apps.
+  static var makeWorkspaceRequest: (WorkspaceRequest) -> Bool = { $0.make() }
+
+  /// Run `work`, which makes its LaunchServices requests through `makeWorkspaceRequest`, on `workspaceQueue`.
+  static func onWorkspaceQueue(_ work: @escaping () -> Void) {
+    workspaceQueue.async(execute: work)
+  }
+
+  /// Open `url` in its default app.
+  static func open(_ url: URL) {
+    onWorkspaceQueue { _ = makeWorkspaceRequest(.open(url)) }
+  }
+
+  /// Open the file at `path` in its default app. Its file URL is made on `workspaceQueue`, since making it reads the file system.
+  static func open(fileAtPath path: String) {
+    onWorkspaceQueue { _ = makeWorkspaceRequest(.open(URL(fileURLWithPath: path))) }
+  }
+
+  /// Open `url` in the app with `bundleID`, or in the default web browser when that app is not installed.
+  static func open(_ url: URL, inApp bundleID: String) {
+    onWorkspaceQueue { _ = makeWorkspaceRequest(.openInApp(url, bundleID: bundleID)) }
+  }
+
+  /// Show the files of `urls` in Finder, selected.
+  /// - Parameter onlyExisting: Whether to leave out the files that do not exist, which is read on `workspaceQueue`. Nothing is shown
+  ///     when none of the files exists.
+  static func revealInFinder(_ urls: [URL], onlyExisting: Bool = false) {
+    onWorkspaceQueue {
+      var urls = urls
+      if onlyExisting {
+        urls = urls.filter { FileManager.default.fileExists(atPath: $0.path) }
+        guard !urls.isEmpty else { return }
+      }
+      _ = makeWorkspaceRequest(.revealInFinder(urls))
+    }
+  }
+
+  /// Show the files at `paths` in Finder, selected. Their file URLs are made on `workspaceQueue`, since making them reads the file
+  /// system.
+  static func revealInFinder(filesAtPaths paths: [String]) {
+    onWorkspaceQueue { _ = makeWorkspaceRequest(.revealInFinder(paths.map { URL(fileURLWithPath: $0) })) }
+  }
+
+  /// Show the folder at `path` in a Finder window.
+  static func showFolderInFinder(_ path: String) {
+    onWorkspaceQueue { _ = makeWorkspaceRequest(.showFolderInFinder(path)) }
+  }
+
   // MARK: - Util functions
 
   static func setBoldTitle(for button: NSButton, _ active: Bool) {
