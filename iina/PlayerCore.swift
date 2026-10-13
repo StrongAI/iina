@@ -713,8 +713,15 @@ class PlayerCore: NSObject {
     mpv.mpvInit()
     events.emit(.mpvInitialized)
 
+    checkConfiguredAudioDevice()
+  }
+
+  /// Use the `auto` audio device when `mpv` does not list the audio device configured in settings, reading the list without waiting
+  /// for `mpv`.
+  func checkConfiguredAudioDevice() {
     let audioDevice = Preference.string(for: .audioDevice)!
-    if !getAudioDevices().contains(where: { $0.name == audioDevice }) {
+    mpv.getNodeAsync(MPVProperty.audioDeviceList) { [self] list in
+      guard !audioDevices(in: list as? [[String: String]] ?? []).contains(where: { $0.name == audioDevice }) else { return }
       log("Audio device configured in settings not found, will default to auto:\n  \(audioDevice)")
       setAudioDevice("auto")
     }
@@ -2079,8 +2086,8 @@ class PlayerCore: NSObject {
 
   /// Return the list of audio devices.
   ///
-  /// This function obtains the list of audio devices from mpv using the
-  /// [audio-device-list](https://mpv.io/manual/stable/#command-interface-audio-device-list) property. It then
+  /// This function takes the list of audio devices from the
+  /// [audio-device-list](https://mpv.io/manual/stable/#command-interface-audio-device-list) property, as mpv last reported it. It then
   /// filters out audio devices that are not applicable based on the current IINA audio output driver setting
   /// (`audioDriverEnableAVFoundation`) and returns the results as a list of `MPVAudioDevice` objects.
   ///
@@ -2112,8 +2119,11 @@ class PlayerCore: NSObject {
   /// [--ao](https://mpv.io/manual/stable/#audio-output-drivers-ao).
   /// - Returns: An array of `MPVAudioDevice` objects  that identify the available audio devices.
   func getAudioDevices() -> [MPVAudioDevice] {
-    let raw = mpv.getNode(MPVProperty.audioDeviceList)
-    guard let list = raw as? [[String: String]] else { return [] }
+    audioDevices(in: info.audioDeviceList)
+  }
+
+  /// The audio devices of `list`, a value of the `audio-device-list` property, that the audio output driver setting allows.
+  private func audioDevices(in list: [[String: String]]) -> [MPVAudioDevice] {
     let ignore = Preference.bool(for: .audioDriverEnableAVFoundation) ? "coreaudio" : "avfoundation"
     var result: [MPVAudioDevice] = []
     for dict in list {
@@ -2505,10 +2515,12 @@ class PlayerCore: NSObject {
   ///     `audio-device` is present in the new list of audio devices. If the audio device cannot be found the `audio-device`
   ///     property is set to `auto` so that both IINA and mpv are in agreement on the selected audio device. For more information
   ///     see issue [#6034](https://github.com/iina/iina/issues/6034).
-  func audioDeviceListChanged() {
-    guard info.state.active else { return }
+  func audioDeviceListChanged(_ list: [[String: String]]) {
+    info.audioDeviceList = list
+    // Until mpv reports the audio device there is none to look for. The device configured in settings is looked for when mpv
+    // starts.
+    guard info.state.active, let device = info.audioDevice else { return }
     let devices = getAudioDevices()
-    let device = mpv.getString(MPVProperty.audioDevice)
     guard !devices.contains(where: {$0.name == device}) else { return }
     log("Selected audio device is no longer present, setting selected device to auto")
     setAudioDevice("auto")
@@ -2527,9 +2539,9 @@ class PlayerCore: NSObject {
   ///
   /// When the audio output driver changes it may cause the currently selected audio device to be invalid because a mpv audio device
   /// is tied to a specific audio output driver. Attempt to find and configure the same audio device with the current audio output driver.
-  func currentAoChanged() {
-    guard let currentAo = mpv.getString(MPVProperty.currentAo),
-          let audioDevice = mpv.getString(MPVProperty.audioDevice) else { return }
+  /// - Parameter currentAo: The audio output driver `mpv` reports, `nil` when no audio output is open.
+  func currentAoChanged(_ currentAo: String?) {
+    guard let currentAo, let audioDevice = info.audioDevice else { return }
     let device = MPVAudioDevice(desc: "", name: audioDevice)
     let invalid = currentAo == "coreaudio" ? "avfoundation" : "coreaudio"
     guard device.driver == invalid else { return }
@@ -2548,7 +2560,7 @@ class PlayerCore: NSObject {
           from \(audioDevice)
           to \(replacement.name)
         """)
-    mpv.setString(MPVProperty.audioDevice, replacement.name)
+    setAudioDevice(replacement.name)
   }
 
   func fullscreenChanged() {

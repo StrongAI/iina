@@ -564,7 +564,7 @@ class MenuController: NSObject, NSMenuDelegate {
 
   private func updateAudioDevice() {
     let devices = PlayerCore.active.getAudioDevices()
-    let currAudioDevice = PlayerCore.active.mpv.getString(MPVProperty.audioDevice)
+    let currAudioDevice = PlayerCore.active.info.audioDevice
     audioDeviceMenu.removeAllItems()
     devices.forEach { device in
       audioDeviceMenu.addItem(withTitle: String(describing: device),

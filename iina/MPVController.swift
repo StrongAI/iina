@@ -130,7 +130,8 @@ class MPVController: NSObject {
     MPVProperty.trackList: MPV_FORMAT_NONE,
     MPVProperty.vf: MPV_FORMAT_NONE,
     MPVProperty.af: MPV_FORMAT_NONE,
-    MPVProperty.audioDeviceList: MPV_FORMAT_NONE,
+    MPVProperty.audioDeviceList: MPV_FORMAT_NODE,
+    MPVProperty.audioDevice: MPV_FORMAT_STRING,
     MPVOption.TrackSelection.vid: MPV_FORMAT_INT64,
     MPVOption.TrackSelection.aid: MPV_FORMAT_INT64,
     MPVOption.TrackSelection.sid: MPV_FORMAT_INT64,
@@ -1404,7 +1405,18 @@ class MPVController: NSObject {
     switch name {
 
     case MPVProperty.audioDeviceList:
-      DispatchQueue.main.async { self.player.audioDeviceListChanged() }
+      // The devices mpv reports, none when it reports no list, as a read of the property would give.
+      var list: [[String: String]] = []
+      if property.format == MPV_FORMAT_NODE, let node = property.data?.assumingMemoryBound(to: mpv_node.self).pointee {
+        list = (try? MPVNode.parse(node)) as? [[String: String]] ?? []
+      }
+      DispatchQueue.main.async { self.player.audioDeviceListChanged(list) }
+
+    case MPVProperty.audioDevice:
+      // The device mpv reports, none when it reports no value, as a read of the property would give.
+      let audioDevice = property.format == MPV_FORMAT_STRING
+        ? property.data.map { String(cString: $0.assumingMemoryBound(to: UnsafePointer<UInt8>.self).pointee) } : nil
+      DispatchQueue.main.async { self.player.info.audioDevice = audioDevice }
 
     case MPVProperty.videoParams:
       DispatchQueue.main.async { self.player.postNotification(.iinaVideoParamsChanged) }
@@ -1685,7 +1697,10 @@ class MPVController: NSObject {
       DispatchQueue.main.async { self.player.idleActiveChanged() }
 
     case MPVProperty.currentAo:
-      DispatchQueue.main.async { self.player.currentAoChanged() }
+      // The driver mpv reports, none when no audio output is open, as a read of the property would give.
+      let currentAo = property.format == MPV_FORMAT_STRING
+        ? property.data.map { String(cString: $0.assumingMemoryBound(to: UnsafePointer<UInt8>.self).pointee) } : nil
+      DispatchQueue.main.async { self.player.currentAoChanged(currentAo) }
 
     default:
       // Utility.log("MPV property changed (unhandled): \(name)")

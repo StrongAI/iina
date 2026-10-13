@@ -220,6 +220,10 @@ class PlaybackInfo {
   var loopFile = "no"
   var loopPlaylist = "no"
 
+  /// The values of mpv's `audio-device-list` and `audio-device` properties, as mpv last reported them.
+  var audioDeviceList: [[String: String]] = []
+  var audioDevice: String?
+
   /** Selected track IDs. Use these (instead of `isSelected` of a track) to check if selected */
   @Atomic var aid: Int?
   @Atomic var sid: Int?

@@ -163,27 +163,27 @@ class PrefKeyBindingViewController: PreferenceViewController, PreferenceWindowEm
 
   @IBAction func newConfFileAction(_ sender: AnyObject) {
     Utility.quickPromptPanel("config.new", validator: configNameValidator, sheetWindow: view.window) { newName in
-      guard let newFilePath = self.newConfigFilePath(forName: newName) else { return }
-
-      if !fm.createFile(atPath: newFilePath, contents: nil, attributes: nil) {
-        Utility.showAlert("config.cannot_create", sheetWindow: self.view.window)
-        return
+      self.newConfigFilePath(forName: newName) { newFilePath in
+        if !fm.createFile(atPath: newFilePath, contents: nil, attributes: nil) {
+          Utility.showAlert("config.cannot_create", sheetWindow: self.view.window)
+          return
+        }
+        self.loadConfigFile(newName)
       }
-      self.loadConfigFile(newName)
     }
   }
 
   @IBAction func duplicateConfFileAction(_ sender: AnyObject) {
     Utility.quickPromptPanel("config.duplicate", validator: configNameValidator, sheetWindow: view.window) { newName in
-      guard let newFilePath = self.newConfigFilePath(forName: newName) else { return }
-
-      do {
-        try fm.copyItem(atPath: self.currentConfFilePath!, toPath: newFilePath)
-      } catch let error {
-        Utility.showAlert("config.cannot_create", arguments: [error.localizedDescription], sheetWindow: self.view.window)
-        return
+      self.newConfigFilePath(forName: newName) { newFilePath in
+        do {
+          try fm.copyItem(atPath: self.currentConfFilePath!, toPath: newFilePath)
+        } catch let error {
+          Utility.showAlert("config.cannot_create", arguments: [error.localizedDescription], sheetWindow: self.view.window)
+          return
+        }
+        self.loadConfigFile(newName)
       }
-      self.loadConfigFile(newName)
     }
     
   }
@@ -191,15 +191,15 @@ class PrefKeyBindingViewController: PreferenceViewController, PreferenceWindowEm
   @IBAction func configFileListDoubleAction(_ sender: NSTableView) {
     guard shouldEnableEdit else { return }
     Utility.quickPromptPanel("config.rename", validator: configNameValidator, sheetWindow: view.window) { newName in
-      guard let newFilePath = self.newConfigFilePath(forName: newName) else { return }
-
-      do {
-        try fm.moveItem(atPath: self.currentConfFilePath!, toPath: newFilePath)
-      } catch let error {
-        Utility.showAlert("config.cannot_create", arguments: [error.localizedDescription], sheetWindow: self.view.window)
-        return
+      self.newConfigFilePath(forName: newName) { newFilePath in
+        do {
+          try fm.moveItem(atPath: self.currentConfFilePath!, toPath: newFilePath)
+        } catch let error {
+          Utility.showAlert("config.cannot_create", arguments: [error.localizedDescription], sheetWindow: self.view.window)
+          return
+        }
+        self.loadConfigFile(newName)
       }
-      self.loadConfigFile(newName)
     }
   }
 
@@ -314,21 +314,27 @@ class PrefKeyBindingViewController: PreferenceViewController, PreferenceWindowEm
     isLoadingConfig = false
   }
 
-  /// Check whether or not a new config file with provided filename should be created.
+  /// Check whether or not a new config file with provided filename should be created, on `Utility.workspaceQueue` since the check
+  /// reads the file system.
   /// - Parameter filename: the filename of the new config file
-  /// - Returns: the path of the new config if could be created; nil otherwise.
-  private func newConfigFilePath(forName filename: String) -> String? {
-    // Check if there exists a config file with the same filename
-    let filePath = Utility.userInputConfDirURL.appendingPathComponent(filename + ".conf").path
-    if fm.fileExists(atPath: filePath) {
-      Utility.quickAskPanel("config.file_existing", sheetWindow: self.view.window) { result in
-        if result == .alertFirstButtonReturn {
-          NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: filePath)])
+  /// - Parameter body: Called on the main thread with the path of the new config file if it could be created.
+  func newConfigFilePath(forName filename: String, then body: @escaping (String) -> Void) {
+    Utility.onWorkspaceQueue {
+      // Check if there exists a config file with the same filename
+      let filePath = Utility.userInputConfDirURL.appendingPathComponent(filename + ".conf").path
+      let exists = fm.fileExists(atPath: filePath)
+      DispatchQueue.main.async {
+        guard exists else {
+          body(filePath)
+          return
+        }
+        Utility.quickAskPanel("config.file_existing", sheetWindow: self.view.window) { result in
+          if result == .alertFirstButtonReturn {
+            Utility.revealInFinder(filesAtPaths: [filePath])
+          }
         }
       }
-      return nil
     }
-    return filePath
   }
 
   private func getFilePath(forConfig conf: String, showAlert: Bool = true) -> String? {
