@@ -1376,7 +1376,8 @@ struct CommandLineStatus {
         playerCore.addShufflePlaylistHook()
         continue
       }
-      playerCore.mpv.setString(argPair.0, argPair.1)
+      // Not waiting for mpv, which sets it before handling the load command the player sends after it.
+      playerCore.mpv.setStringAsync(argPair.0, argPair.1)
     }
   }
 }

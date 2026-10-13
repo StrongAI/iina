@@ -97,6 +97,8 @@ class PlaybackInfo {
   var displayHeight: Int?
 
   var rotation: Int = 0
+  /// The rotation of the video stream, as `mpv` last reported `video-params/rotate`.
+  var videoParamsRotation: Int = 0
 
   var videoPosition: VideoTime?
   var videoDuration: VideoTime?

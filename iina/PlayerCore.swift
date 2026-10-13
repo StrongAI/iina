@@ -1555,28 +1555,55 @@ class PlayerCore: NSObject {
     mpv.setFlag(MPVOption.Subtitles.secondarySubVisibility, newState)
   }
 
+  /// Load the given subtitle file, or reload it when it is loaded already, without waiting for `mpv`.
+  ///
+  /// `mpv` loads the file on a thread of its own, so a request made after this one can be handled before the file is loaded.
   func loadExternalSubFile(_ url: URL, delay: Bool = false, suppressError: Bool = false) {
-    var track: MPVTrack?
-    info.$subTracks.withLock { track = $0.first(where: { $0.externalFilename == url.mpvStr }) }
-    if let track {
+    if let track = externalSubTrack(loadedFrom: url) {
+      mpv.asyncCommand(.subReload, args: [String(track.id)], checkError: false, replyUserdata: 0)
+      return
+    }
+
+    mpv.asyncCommand(.subAdd, args: [url.mpvStr], level: .verbose) { [self] code in
+      subFileAdded(url, code, delay: delay, suppressError: suppressError)
+    }
+  }
+
+  /// Load the given subtitle file, or reload it when it is loaded already, waiting for `mpv`, which loads it on a thread of its own,
+  /// so that the requests made after this one are handled once the file is loaded. Not for the main thread.
+  func loadExternalSubFileWaiting(_ url: URL, suppressError: Bool = false) {
+    if let track = externalSubTrack(loadedFrom: url) {
       mpv.command(.subReload, args: [String(track.id)], checkError: false)
       return
     }
 
-    mpv.command(.subAdd, args: [url.mpvStr], checkError: false, level: .verbose) { code in
-      if code < 0 {
-        self.log("Unsupported sub: \(url.mpvStr)", level: .error)
-        // only show alert when the subtitle is added manually
-        guard !suppressError else { return }
-        // if another modal panel is shown, popping up an alert now will cause some infinite loop.
-        if delay {
-          DispatchQueue.main.asyncAfter(deadline: DispatchTime.now() + 0.5) {
-            Utility.showAlert("unsupported_sub")
-          }
-        } else {
-          DispatchQueue.main.async {
-            Utility.showAlert("unsupported_sub")
-          }
+    mpv.command(.subAdd, args: [url.mpvStr], checkError: false, level: .verbose) { [self] code in
+      subFileAdded(url, code, delay: false, suppressError: suppressError)
+    }
+  }
+
+  /// The subtitle track loaded from the given file, if there is one.
+  private func externalSubTrack(loadedFrom url: URL) -> MPVTrack? {
+    var track: MPVTrack?
+    info.$subTracks.withLock { track = $0.first(where: { $0.externalFilename == url.mpvStr }) }
+    return track
+  }
+
+  /// Handle the error code `mpv` answered a request to add the given subtitle file with, telling the user when the file could not be
+  /// added.
+  private func subFileAdded(_ url: URL, _ code: Int32, delay: Bool, suppressError: Bool) {
+    if code < 0 {
+      self.log("Unsupported sub: \(url.mpvStr)", level: .error)
+      // only show alert when the subtitle is added manually
+      guard !suppressError else { return }
+      // if another modal panel is shown, popping up an alert now will cause some infinite loop.
+      if delay {
+        DispatchQueue.main.asyncAfter(deadline: DispatchTime.now() + 0.5) {
+          Utility.showAlert("unsupported_sub")
+        }
+      } else {
+        DispatchQueue.main.async {
+          Utility.showAlert("unsupported_sub")
         }
       }
     }
@@ -1817,24 +1844,7 @@ class PlayerCore: NSObject {
     log("Adding video filter \(filter)...")
     // check hwdec
     let askHwdec: (() -> Bool) = {
-      let panel = NSAlert()
-      panel.messageText = NSLocalizedString("alert.title_warning", comment: "Warning")
-      panel.informativeText = NSLocalizedString("alert.filter_hwdec.message", comment: "")
-      panel.addButton(withTitle: NSLocalizedString("alert.filter_hwdec.turn_off", comment: "Turn off hardware decoding"))
-      panel.addButton(withTitle: NSLocalizedString("alert.filter_hwdec.use_copy", comment: "Switch to Auto(Copy)"))
-      panel.addButton(withTitle: NSLocalizedString("alert.filter_hwdec.abort", comment: "Abort"))
-      switch panel.runModal() {
-      case .alertFirstButtonReturn:  // turn off
-        self.mpv.setString(MPVProperty.hwdec, "no")
-        Preference.set(Preference.HardwareDecoderOption.disabled.rawValue, for: .hardwareDecoder)
-        return true
-      case .alertSecondButtonReturn:
-        self.mpv.setString(MPVProperty.hwdec, "auto-copy")
-        Preference.set(Preference.HardwareDecoderOption.autoCopy.rawValue, for: .hardwareDecoder)
-        return true
-      default:
-        return false
-      }
+      self.askHwdecForFilter { self.mpv.setString(MPVProperty.hwdec, $0) }
     }
     let hwdec = mpv.getString(MPVProperty.hwdec)
     if hwdec == "auto" {
@@ -1858,6 +1868,66 @@ class PlayerCore: NSObject {
       log("Successfully added video filter \(filter)")
     }
     return result
+  }
+
+  /// Add a video filter given as a `MPVFilter` object without waiting for `mpv`, see `addVideoFilter(_:then:)`.
+  func addVideoFilter(_ filter: MPVFilter, then completion: @escaping (Bool) -> Void) {
+    addVideoFilter(filter.stringFormat, then: completion)
+  }
+
+  /// Add a video filter given as a string without waiting for `mpv`.
+  ///
+  /// This method will prompt the user to change IINA's video preferences if hardware decoding is set to `auto`.
+  /// - Parameter filter: The filter to add.
+  /// - Parameter completion: Called on the main thread with `true` if the filter was added, `false` otherwise.
+  func addVideoFilter(_ filter: String, then completion: @escaping (Bool) -> Void) {
+    log("Adding video filter \(filter)...")
+    // Read after the requests made before, so that a change to hwdec requested before is seen.
+    mpv.getNodeAsync(MPVProperty.hwdec) { [self] hwdec in
+      DispatchQueue.main.async { [self] in
+        if hwdec as? String == "auto" {
+          guard askHwdecForFilter(setHwdec: { mpv.setStringAsync(MPVProperty.hwdec, $0) }) else {
+            completion(false)
+            return
+          }
+        }
+        // Sent after the change to hwdec, which mpv makes first.
+        mpv.asyncCommand(.vf, args: ["add", filter]) { [self] code in
+          let added = code >= 0
+          if !added {
+            log("Failed to add video filter \(filter)", level: .warning)
+          } else {
+            log("Successfully added video filter \(filter)")
+          }
+          DispatchQueue.main.async { completion(added) }
+        }
+      }
+    }
+  }
+
+  /// Ask the user, before a video filter is added while hardware decoding is set to `auto`, whether to turn hardware decoding off,
+  /// to switch it to Auto(Copy) or to abort adding the filter. Must be called on the main thread.
+  /// - Parameter setHwdec: Sets the `hwdec` property of `mpv` to the value the user chose.
+  /// - Returns: `true` if the user changed hardware decoding, `false` if the user aborted adding the filter.
+  private func askHwdecForFilter(setHwdec: (String) -> Void) -> Bool {
+    let panel = NSAlert()
+    panel.messageText = NSLocalizedString("alert.title_warning", comment: "Warning")
+    panel.informativeText = NSLocalizedString("alert.filter_hwdec.message", comment: "")
+    panel.addButton(withTitle: NSLocalizedString("alert.filter_hwdec.turn_off", comment: "Turn off hardware decoding"))
+    panel.addButton(withTitle: NSLocalizedString("alert.filter_hwdec.use_copy", comment: "Switch to Auto(Copy)"))
+    panel.addButton(withTitle: NSLocalizedString("alert.filter_hwdec.abort", comment: "Abort"))
+    switch panel.runModal() {
+    case .alertFirstButtonReturn:  // turn off
+      setHwdec("no")
+      Preference.set(Preference.HardwareDecoderOption.disabled.rawValue, for: .hardwareDecoder)
+      return true
+    case .alertSecondButtonReturn:
+      setHwdec("auto-copy")
+      Preference.set(Preference.HardwareDecoderOption.autoCopy.rawValue, for: .hardwareDecoder)
+      return true
+    default:
+      return false
+    }
   }
 
   private func logRemoveFilter(type: String, result: Bool, name: String) {
@@ -2235,7 +2305,8 @@ class PlayerCore: NSObject {
             guard !loadedSubs.contains(sub) else { continue }
             loadedSubs.insert(sub)
             try checkTicket(currentTicket)
-            loadExternalSubFile(sub, suppressError: true)
+            // Waiting, off the main thread, so that the track set below is set once the files are loaded.
+            loadExternalSubFileWaiting(sub, suppressError: true)
           }
           // set sub to the first one
           try checkTicket(currentTicket)
@@ -2713,17 +2784,41 @@ class PlayerCore: NSObject {
     postNotification(.iinaTracklistChanged)
   }
 
-  func onVideoReconfig() {
+  /// The display size and rotations `mpv` reports when the video is reconfigured, and whether its core is idle, see
+  /// `readVideoReconfig`.
+  struct VideoReconfig {
+    let dwidth: Int
+    let dheight: Int
+    let videoParamsRotation: Int
+    let rotation: Int
+    let coreIdle: Bool
+  }
+
+  /// Read the display size, the rotations and the idle state of the core when `mpv` reports the video reconfigured.
+  ///
+  /// This waits for `mpv`, so it is called on the queue for reading `mpv` events, never on the main thread.
+  func readVideoReconfig() -> VideoReconfig {
+    VideoReconfig(dwidth: mpv.getInt(MPVProperty.dwidth),
+                  dheight: mpv.getInt(MPVProperty.dheight),
+                  videoParamsRotation: mpv.getInt(MPVProperty.videoParamsRotate),
+                  rotation: mpv.getInt(MPVOption.Video.videoRotate),
+                  coreIdle: mpv.getFlag(MPVProperty.coreIdle))
+  }
+
+  func onVideoReconfig(_ reconfig: VideoReconfig) {
     // If loading file, video reconfig can return 0 width and height
     guard info.state.loaded else { return }
-    var dwidth = mpv.getInt(MPVProperty.dwidth)
-    var dheight = mpv.getInt(MPVProperty.dheight)
+    // The rotations read with the display size, from which the window works out the size of the video.
+    info.videoParamsRotation = reconfig.videoParamsRotation
+    info.rotation = reconfig.rotation
+    var dwidth = reconfig.dwidth
+    var dheight = reconfig.dheight
     if info.rotation == 90 || info.rotation == 270 {
       swap(&dwidth, &dheight)
     }
     if dwidth != info.displayWidth! || dheight != info.displayHeight! {
       // filter the last video-reconfig event before quit
-      if dwidth == 0 && dheight == 0 && mpv.getFlag(MPVProperty.coreIdle) { return }
+      if dwidth == 0 && dheight == 0 && reconfig.coreIdle { return }
       // video size changed
       info.displayWidth = dwidth
       info.displayHeight = dheight
@@ -3422,8 +3517,8 @@ class PlayerCore: NSObject {
         height = AppData.heightWhenNoVideo
       }
 
-      // if video has rotation
-      let netRotate = mpv.getInt(MPVProperty.videoParamsRotate) - mpv.getInt(MPVOption.Video.videoRotate)
+      // if video has rotation, as mpv reported it, so that the main thread does not wait for mpv
+      let netRotate = info.videoParamsRotation - info.rotation
       let rotate = netRotate >= 0 ? netRotate : netRotate + 360
       if rotate == 90 || rotate == 270 {
         swap(&width, &height)
@@ -3435,7 +3530,8 @@ class PlayerCore: NSObject {
   var originalVideoSize: (Int, Int) {
     get {
       if let w = info.videoWidth, let h = info.videoHeight {
-        let netRotate = mpv.getInt(MPVProperty.videoParamsRotate) - mpv.getInt(MPVOption.Video.videoRotate)
+        // The rotations mpv reported, so that the main thread does not wait for mpv.
+        let netRotate = info.videoParamsRotation - info.rotation
         let rotate = netRotate >= 0 ? netRotate : netRotate + 360
         if rotate == 90 || rotate == 270 {
           return (h, w)

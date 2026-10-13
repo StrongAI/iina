@@ -1267,7 +1267,9 @@ class MPVController: NSObject {
     case MPV_EVENT_AUDIO_RECONFIG: break
 
     case MPV_EVENT_VIDEO_RECONFIG:
-      DispatchQueue.main.async { self.player.onVideoReconfig() }
+      // The display size is read here, as the properties of a loaded file are, so that the main thread does not wait for mpv.
+      let reconfig = player.readVideoReconfig()
+      DispatchQueue.main.async { self.player.onVideoReconfig(reconfig) }
 
     case MPV_EVENT_START_FILE:
       player.info.$fileStartCount.withLock { $0 += 1 }
@@ -1412,7 +1414,10 @@ class MPVController: NSObject {
         logPropertyValueError(MPVProperty.videoParamsRotate, property.format)
         break
       }
-      DispatchQueue.main.async { self.player.mainWindow.rotation = rotation }
+      DispatchQueue.main.async { [self] in
+        player.mainWindow.rotation = rotation
+        player.info.videoParamsRotation = rotation
+      }
 
     case MPVProperty.videoParamsPrimaries:
       fallthrough;

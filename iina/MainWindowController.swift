@@ -2610,7 +2610,8 @@ class MainWindowController: PlayerWindowController {
     if let videoWidth = player.info.videoWidth {
       let windowScale = Double((frame ?? window.frame).width) / Double(videoWidth)
       player.info.cachedWindowScale = windowScale
-      player.mpv.setDouble(MPVOption.Window.windowScale, windowScale, level: .verbose)
+      // Not waiting for mpv, which reports the change after it, as it does any change, to windowScaleChanged.
+      player.mpv.setDoubleAsync(MPVOption.Window.windowScale, windowScale, level: .verbose)
     }
   }
 

@@ -180,12 +180,13 @@ extension PlayerCore {
   private func openDropped(paths: [String], urls: [URL], useGlobalOpenRouting: Bool) {
     // check 3d lut files
     if paths.count == 1 && Utility.lut3dExt.contains(paths[0].lowercasedPathExtension) {
-      let result = addVideoFilter(MPVFilter(lavfiName: "lut3d", label: "iina_quickl3d", paramDict: [
+      addVideoFilter(MPVFilter(lavfiName: "lut3d", label: "iina_quickl3d", paramDict: [
         "file": paths[0],
         "interp": "nearest"
-        ]))
-      if result {
-        sendOSD(.addFilter("3D LUT"))
+        ])) { [self] added in
+        if added {
+          sendOSD(.addFilter("3D LUT"))
+        }
       }
       return
     }
