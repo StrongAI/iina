@@ -952,13 +952,13 @@ class AppDelegate: NSObject, NSApplicationDelegate, SPUUpdaterDelegate {
       // presentation options
       if let fsValue = queryDict["full_screen"], fsValue == "1" {
         // full_screen
-        player.mpv.setFlag(MPVOption.Window.fullscreen, true)
+        player.mpv.setFlagAsync(MPVOption.Window.fullscreen, true)
       } else if let pipValue = queryDict["pip"], pipValue == "1" {
         // pip
         player.mainWindow.enterPIP()
       }
 
-      // mpv options
+      // mpv options, set without waiting for mpv
       for query in queries {
         if query.name.hasPrefix("mpv_") {
           let mpvOptionName = String(query.name.dropFirst(4))
@@ -968,7 +968,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, SPUUpdaterDelegate {
           }
           guard let mpvOptionValue = query.value else { continue }
           Logger.log("Setting \(mpvOptionName) to \(mpvOptionValue)")
-          player.mpv.setString(mpvOptionName, mpvOptionValue)
+          player.mpv.setStringAsync(mpvOptionName, mpvOptionValue)
         }
       }
 
@@ -1561,7 +1561,7 @@ class RemoteCommandController {
     }
     remoteCommand.changePlaybackRateCommand.supportedPlaybackRates = [0.5, 1, 1.5, 2]
     remoteCommand.changePlaybackRateCommand.addTarget { event in
-      PlayerCore.lastActive.setSpeed(Double((event as! MPChangePlaybackRateCommandEvent).playbackRate))
+      RemoteCommandController.changePlaybackRate((event as! MPChangePlaybackRateCommandEvent).playbackRate)
       return .success
     }
     remoteCommand.changePlaybackPositionCommand.addTarget { event in
@@ -1570,6 +1570,11 @@ class RemoteCommandController {
     }
     isEnabled = true
     log("Enabled media keys and remote commands")
+  }
+
+  /// Play the last active player at `rate`, as the change playback rate command asks, without waiting for mpv.
+  static func changePlaybackRate(_ rate: Float) {
+    PlayerCore.lastActive.setSpeed(Double(rate))
   }
 
   // MARK: - Private Functions

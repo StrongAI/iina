@@ -208,7 +208,8 @@ fileprivate class TrackAPI: JavascriptAPI, TrackAPIExportable {
     }
     guard let urlString = shouldOpenURL(urlString) else { return }
     let parsedURL = URL(string: urlString)
-    let url = parsedURL?.scheme == nil ? URL(fileURLWithPath: urlString) : parsedURL!
+    // A track is a file, so its URL is made without reading the filesystem.
+    let url = parsedURL?.scheme == nil ? URL(fileURLWithPath: urlString, isDirectory: false) : parsedURL!
     switch type {
     case .audio: player!.loadExternalAudioFile(url)
     case .sub, .secondSub: player!.loadExternalSubFile(url)

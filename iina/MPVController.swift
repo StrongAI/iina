@@ -1883,28 +1883,29 @@ class MPVController: NSObject {
     guard let keyPath else { return }
     guard let infos = optionObservers[keyPath] else { return }
 
+    // The options are set without waiting for mpv.
     for info in infos {
       switch info.valueType {
       case .int:
         let value = Preference.integer(for: info.prefKey)
-        setInt(info.optionName, value)
+        setIntAsync(info.optionName, value)
 
       case .float:
         let value = Preference.float(for: info.prefKey)
-        setDouble(info.optionName, Double(value))
+        setDoubleAsync(info.optionName, Double(value))
 
       case .bool:
         let value = Preference.bool(for: info.prefKey)
-        setFlag(info.optionName, value)
+        setFlagAsync(info.optionName, value)
 
       case .string:
         if let value = Preference.string(for: info.prefKey) {
-          setString(info.optionName, value)
+          setStringAsync(info.optionName, value)
         }
 
       case .color:
         if let value = Preference.string(for: info.prefKey) {
-          setString(info.optionName, value)
+          setStringAsync(info.optionName, value)
         }
 
       case .other:
@@ -1913,7 +1914,7 @@ class MPVController: NSObject {
           return
         }
         if let value = tr(info.prefKey) {
-          setString(info.optionName, value)
+          setStringAsync(info.optionName, value)
         }
       }
     }

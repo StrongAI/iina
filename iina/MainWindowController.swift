@@ -237,10 +237,11 @@ class MainWindowController: PlayerWindowController {
     didSet {
       // Must not access mpv while it is asynchronously processing stop and quit commands.
       guard player.info.state.active else { return }
+      // mpv is told without waiting for it.
       switch fsState {
-      case .fullscreen: player.mpv.setFlag(MPVOption.Window.fullscreen, true)
+      case .fullscreen: player.mpv.setFlagAsync(MPVOption.Window.fullscreen, true)
       case .animating:  break
-      case .windowed:   player.mpv.setFlag(MPVOption.Window.fullscreen, false)
+      case .windowed:   player.mpv.setFlagAsync(MPVOption.Window.fullscreen, false)
       }
     }
   }
