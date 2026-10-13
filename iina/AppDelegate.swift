@@ -41,6 +41,8 @@ class AppDelegate: NSObject, NSApplicationDelegate, SPUUpdaterDelegate {
   private var pendingFilesForOpenFile: [String] = []
   /** The timer for `OpenFileRepeatTime` and `application(_:openFile:)`. */
   private var openFileTimer: Timer?
+  /// The queue on which the paths of the files the system asks the app to open are made into file URLs, see `openFiles`.
+  let openQueue = DispatchQueue(label: "IINAAppDelegateOpenTask", qos: .userInitiated)
 
   private var allPlayersHaveShutdown = false
 
@@ -796,11 +798,19 @@ class AppDelegate: NSObject, NSApplicationDelegate, SPUUpdaterDelegate {
       shouldIgnoreOpenFile = false
       return
     }
-    let urls = pendingFilesForOpenFile.map { URL(fileURLWithPath: $0) }
+    let paths = pendingFilesForOpenFile
     pendingFilesForOpenFile.removeAll()
+    openFiles(paths)
+  }
 
-    // if installing a plugin package
-    if let pluginPackageURL = urls.first(where: { $0.pathExtension == "iinaplgz" }) {
+  /// Open the files the system asked the app to open, given by their paths, or install the plugin package among them.
+  ///
+  /// Making file URLs, which tells a folder from a file, reads the filesystem, so it is done on `openQueue`, then the files are
+  /// opened on the main thread.
+  func openFiles(_ paths: [String]) {
+    // if installing a plugin package, which is a file, so that its URL is made without reading the filesystem
+    if let pluginPackagePath = paths.first(where: { ($0 as NSString).pathExtension == "iinaplgz" }) {
+      let pluginPackageURL = URL(fileURLWithPath: pluginPackagePath, isDirectory: false)
       if Preference.enableNewSettings {
         SettingsWindow.default.installPlugin(localPackageURL: pluginPackageURL)
       } else {
@@ -809,10 +819,15 @@ class AppDelegate: NSObject, NSApplicationDelegate, SPUUpdaterDelegate {
       return
     }
 
-    // open pending files
-    PlayerCore.openURLs(urls) { count in
-      if count == 0 {
-        Utility.showAlert("nothing_to_open")
+    openQueue.async {
+      let urls = paths.map { URL(fileURLWithPath: $0) }
+      DispatchQueue.main.async {
+        // open pending files
+        PlayerCore.openURLs(urls) { count in
+          if count == 0 {
+            Utility.showAlert("nothing_to_open")
+          }
+        }
       }
     }
   }
