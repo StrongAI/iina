@@ -573,7 +573,7 @@ fileprivate class SpeedView: SidebarSliderView {
   }
 
   override func update() {
-    let speed = player.mpv.getDouble(MPVOption.PlaybackControl.speed)
+    let speed = player.info.playSpeed
     slider.allowsTickMarkValuesOnly = false
     updateSpeed(to: speed)
   }

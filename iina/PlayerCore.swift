@@ -1041,9 +1041,12 @@ class PlayerCore: NSObject {
     mpv.command(.stop, level: .verbose)
   }
 
+  /// Mute or unmute without waiting for `mpv`. With no state given this toggles the state last asked for, which is stored at once
+  /// so that a second toggle made before `mpv` reports the first one toggles it back.
   func toggleMute(_ set: Bool? = nil) {
-    let newState = set ?? !mpv.getFlag(MPVOption.Audio.mute)
-    mpv.setFlag(MPVOption.Audio.mute, newState)
+    let newState = set ?? !info.isMuted
+    info.isMuted = newState
+    mpv.setFlagAsync(MPVOption.Audio.mute, newState)
   }
 
   func seek(percent: Double, forceExact: Bool = false) {
@@ -1106,11 +1109,7 @@ class PlayerCore: NSObject {
     // It must be running when stepping to avoid slowdowns caused by mpv waiting for IINA to call
     // mpv_render_report_swap.
     mainWindow.videoView.displayActive()
-    if backwards {
-      mpv.command(.frameBackStep)
-    } else {
-      mpv.command(.frameStep)
-    }
+    mpv.asyncCommand(backwards ? .frameBackStep : .frameStep, replyUserdata: 0)
   }
 
   /// Takes a screenshot, attempting to augment mpv's `screenshot` command with additional functionality & control, for example
@@ -1384,11 +1383,12 @@ class PlayerCore: NSObject {
   }
 
   func toggleShuffle() {
+    // The playlist read the change notice asks for is answered after mpv has shuffled it.
     if info.isShuffled {
-      mpv.command(.playlistUnshuffle)
+      mpv.asyncCommand(.playlistUnshuffle, replyUserdata: 0)
       info.isShuffled = false
     } else {
-      mpv.command(.playlistShuffle)
+      mpv.asyncCommand(.playlistShuffle, replyUserdata: 0)
       info.isShuffled = true
     }
     postNotification(.iinaPlaylistChanged)
@@ -1401,7 +1401,7 @@ class PlayerCore: NSObject {
     let shouldSendConstrainedVolumeOSD =
       constrain && volume != constrainedVolume && info.volume == appliedVolume
     info.volume = appliedVolume
-    mpv.setDouble(MPVOption.Audio.volume, appliedVolume, level: .verbose)
+    mpv.setDoubleAsync(MPVOption.Audio.volume, appliedVolume, level: .verbose)
     Preference.set(constrainedVolume, for: .softVolume)
     if shouldSendConstrainedVolumeOSD {
       // mpv won't send MPV_EVENT_PROPERTY_CHANGE if the volume is unchanged.
@@ -1427,15 +1427,15 @@ class PlayerCore: NSObject {
 
   func setSpeed(_ speed: Double) {
     let speed = max(AppData.mpvMinPlaybackSpeed, speed)
-    mpv.setDouble(MPVOption.PlaybackControl.speed, speed)
+    mpv.setDoubleAsync(MPVOption.PlaybackControl.speed, speed)
   }
 
   func setVideoAspect(_ aspect: String) {
     if Regex.aspect.matches(aspect) {
-      mpv.setString(MPVOption.Video.videoAspectOverride, aspect)
+      mpv.setStringAsync(MPVOption.Video.videoAspectOverride, aspect)
       info.unsureAspect = aspect
     } else {
-      mpv.setString(MPVOption.Video.videoAspectOverride, "-1")
+      mpv.setStringAsync(MPVOption.Video.videoAspectOverride, "-1")
       // if not a aspect string, set aspect to default, and also the info string.
       info.unsureAspect = "Default"
     }
@@ -1443,7 +1443,7 @@ class PlayerCore: NSObject {
 
   func setVideoRotate(_ degree: Int) {
     if AppData.rotations.firstIndex(of: degree)! >= 0 {
-      mpv.setInt(MPVOption.Video.videoRotate, degree)
+      mpv.setIntAsync(MPVOption.Video.videoRotate, degree)
     }
   }
 
@@ -1482,13 +1482,13 @@ class PlayerCore: NSObject {
   }
 
   func toggleDeinterlace(_ enable: Bool) {
-    mpv.setFlag(MPVOption.Video.deinterlace, enable)
+    mpv.setFlagAsync(MPVOption.Video.deinterlace, enable)
   }
 
   func toggleHardwareDecoding(_ enable: Bool) {
     let value = String(describing: Preference.enum(for: .hardwareDecoder) as
                        Preference.HardwareDecoderOption)
-    mpv.setString(MPVOption.Video.hwdec, enable ? value : "no")
+    mpv.setStringAsync(MPVOption.Video.hwdec, enable ? value : "no")
   }
 
   enum VideoEqualizerType {
@@ -1509,11 +1509,12 @@ class PlayerCore: NSObject {
     case .hue:
       optionName = MPVOption.Equalizer.hue
     }
-    mpv.command(.set, args: [optionName, value.description], level: .verbose)
+    mpv.asyncCommand(.set, args: [optionName, value.description], replyUserdata: 0, level: .verbose)
   }
 
+  /// Load the given video file as an extra video track, without waiting for `mpv`.
   func loadExternalVideoFile(_ url: URL) {
-    mpv.command(.videoAdd, args: [url.mpvStr], checkError: false) { code in
+    mpv.asyncCommand(.videoAdd, args: [url.mpvStr]) { code in
       if code < 0 {
         self.log("Unsupported video: \(url.mpvStr)", level: .error)
         DispatchQueue.main.async {
@@ -1523,8 +1524,9 @@ class PlayerCore: NSObject {
     }
   }
 
+  /// Load the given audio file as an extra audio track, without waiting for `mpv`.
   func loadExternalAudioFile(_ url: URL) {
-    mpv.command(.audioAdd, args: [url.mpvStr], checkError: false) { code in
+    mpv.asyncCommand(.audioAdd, args: [url.mpvStr]) { code in
       if code < 0 {
         self.log("Unsupported audio: \(url.mpvStr)", level: .error)
         DispatchQueue.main.async {
@@ -1537,22 +1539,26 @@ class PlayerCore: NSObject {
   /// Shows the Font Chooser window to select a new font for the player
   func chooseSubFont() {
     guard info.state.active else { return }
-    let subFont = mpv.getString(MPVOption.Subtitles.subFont)
-    Utility.quickFontPickerWindow(selecting: subFont) { [self] result in
-      if let result {
-        setSubFont(result)
+    // The font is read without waiting for mpv, and the picker is shown once mpv answers.
+    mpv.getNodeAsync(MPVOption.Subtitles.subFont) { [self] subFont in
+      DispatchQueue.main.async { [self] in
+        Utility.quickFontPickerWindow(selecting: subFont as? String) { [self] result in
+          if let result {
+            setSubFont(result)
+          }
+        }
       }
     }
   }
 
   func toggleSubVisibility(_ set: Bool? = nil) {
     let newState = set ?? !info.isSubVisible
-    mpv.setFlag(MPVOption.Subtitles.subVisibility, newState)
+    mpv.setFlagAsync(MPVOption.Subtitles.subVisibility, newState)
   }
 
   func toggleSecondSubVisibility(_ set: Bool? = nil) {
     let newState = set ?? !info.isSecondSubVisible
-    mpv.setFlag(MPVOption.Subtitles.secondarySubVisibility, newState)
+    mpv.setFlagAsync(MPVOption.Subtitles.secondarySubVisibility, newState)
   }
 
   /// Load the given subtitle file, or reload it when it is loaded already, without waiting for `mpv`.
@@ -1644,12 +1650,12 @@ class PlayerCore: NSObject {
   }
 
   func setAudioDelay(_ delay: Double) {
-    mpv.setDouble(MPVOption.Audio.audioDelay, delay)
+    mpv.setDoubleAsync(MPVOption.Audio.audioDelay, delay)
   }
 
   func setSubDelay(_ delay: Double, forPrimary: Bool = true) {
     let option = forPrimary ? MPVOption.Subtitles.subDelay : MPVOption.Subtitles.secondarySubDelay
-    mpv.setDouble(option, delay)
+    mpv.setDoubleAsync(option, delay)
   }
 
   func appendToPlaylist(_ path: String, silent: Bool = false) {
@@ -1777,7 +1783,7 @@ class PlayerCore: NSObject {
       return nil
     }
     let chapter = chapters[pos]
-    mpv.command(.seek, args: ["\(chapter.time.second)", "absolute"])
+    mpv.asyncCommand(.seek, args: ["\(chapter.time.second)", "absolute"], replyUserdata: 0)
     resume()
     // need to update time pos
     syncUITime()
@@ -2122,54 +2128,54 @@ class PlayerCore: NSObject {
   }
 
   func setAudioDevice(_ name: String) {
-    mpv.setString(MPVProperty.audioDevice, name)
+    mpv.setStringAsync(MPVProperty.audioDevice, name)
   }
 
   /** Scale is a double value in [-100, -1] + [1, 100] */
   func setSubScale(_ scale: Double) {
     if scale > 0 {
-      mpv.setDouble(MPVOption.Subtitles.subScale, scale, level: .verbose)
+      mpv.setDoubleAsync(MPVOption.Subtitles.subScale, scale, level: .verbose)
     } else {
-      mpv.setDouble(MPVOption.Subtitles.subScale, -scale, level: .verbose)
+      mpv.setDoubleAsync(MPVOption.Subtitles.subScale, -scale, level: .verbose)
     }
   }
 
   func setSubPos(_ pos: Int, forPrimary: Bool = true) {
     let option = forPrimary ? MPVOption.Subtitles.subPos : MPVOption.Subtitles.secondarySubPos
-    mpv.setInt(option, pos, level: .verbose)
+    mpv.setIntAsync(option, pos, level: .verbose)
   }
 
   func setSubTextColor(_ colorString: String) {
-    mpv.setString("options/" + MPVOption.Subtitles.subColor, colorString)
+    mpv.setStringAsync("options/" + MPVOption.Subtitles.subColor, colorString)
   }
 
   func setSubTextSize(_ size: Double) {
-    mpv.setDouble("options/" + MPVOption.Subtitles.subFontSize, size)
+    mpv.setDoubleAsync("options/" + MPVOption.Subtitles.subFontSize, size)
   }
 
   func setSubTextBold(_ bold: Bool) {
-    mpv.setFlag("options/" + MPVOption.Subtitles.subBold, bold)
+    mpv.setFlagAsync("options/" + MPVOption.Subtitles.subBold, bold)
   }
 
   func setSubTextBorderColor(_ colorString: String) {
-    mpv.setString("options/" + MPVOption.Subtitles.subOutlineColor, colorString)
+    mpv.setStringAsync("options/" + MPVOption.Subtitles.subOutlineColor, colorString)
   }
 
   func setSubTextBorderSize(_ size: Double) {
-    mpv.setDouble("options/" + MPVOption.Subtitles.subOutlineSize, size)
+    mpv.setDoubleAsync("options/" + MPVOption.Subtitles.subOutlineSize, size)
   }
 
   func setSubTextBgColor(_ colorString: String) {
-    mpv.setString("options/" + MPVOption.Subtitles.subBackColor, colorString)
+    mpv.setStringAsync("options/" + MPVOption.Subtitles.subBackColor, colorString)
   }
 
   func setSubEncoding(_ encoding: String) {
-    mpv.setString(MPVOption.Subtitles.subCodepage, encoding)
+    mpv.setStringAsync(MPVOption.Subtitles.subCodepage, encoding)
     info.subEncoding = encoding
   }
 
   func setSubFont(_ font: String) {
-    mpv.setString(MPVOption.Subtitles.subFont, font)
+    mpv.setStringAsync(MPVOption.Subtitles.subFont, font)
   }
 
   func savePlaybackPosition() {
@@ -2665,11 +2671,13 @@ class PlayerCore: NSObject {
   }
 
   func secondarySubDelayChanged(_ delay: Double) {
+    info.secondSubDelay = delay
     sendOSD(.secondSubDelay(delay))
     postNotification(.iinaSubDelayChanged)
   }
 
   func secondarySubPosChanged(_ position: Double) {
+    info.secondSubPos = position
     sendOSD(.secondSubPos(position))
     postNotification(.iinaSubPositionChanged)
   }
@@ -2711,6 +2719,7 @@ class PlayerCore: NSObject {
 
   func subScaleChanged(_ scale: Double) {
     guard scale != 0 else { return }
+    info.subScale = scale
     let displayValue = scale >= 1 ? scale : -1 / scale
     let truncated = round(displayValue * 100) / 100
     sendOSD(.subScale(truncated))
@@ -2733,6 +2742,7 @@ class PlayerCore: NSObject {
   }
 
   func subPosChanged(_ position: Double) {
+    info.subPos = position
     sendOSD(.subPos(position))
     postNotification(.iinaSubPositionChanged)
   }

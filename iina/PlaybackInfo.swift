@@ -196,6 +196,12 @@ class PlaybackInfo {
 
   var audioDelay: Double = 0
   var subDelay: Double = 0
+  var secondSubDelay: Double = 0
+
+  /// The subtitle positions and scale `mpv` last reported.
+  var subPos: Double = 100
+  var secondSubPos: Double = 100
+  var subScale: Double = 1
 
   // cache related
   var pausedForCache: Bool = false

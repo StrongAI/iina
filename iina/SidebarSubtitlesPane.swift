@@ -249,8 +249,7 @@ fileprivate class SubDelayView: SidebarSliderView {
   }
 
   override func update() {
-    let delayOption = isPrimary ? MPVOption.Subtitles.subDelay : MPVOption.Subtitles.secondarySubDelay
-    let subDelay = player.mpv.getDouble(delayOption)
+    let subDelay = isPrimary ? player.info.subDelay : player.info.secondSubDelay
     slider.doubleValue = subDelay
     input.doubleValue = subDelay
     resetButton.isHidden = slider.doubleValue == 0
@@ -358,8 +357,7 @@ fileprivate class SubPositionDelayView: NSView {
   }
 
   private func updatePosition() {
-    let posOption = isPrimary ? MPVOption.Subtitles.subPos : MPVOption.Subtitles.secondarySubPos
-    positionSlider.intValue = Int32(player.mpv.getInt(posOption))
+    positionSlider.intValue = Int32(isPrimary ? player.info.subPos : player.info.secondSubPos)
   }
 
   @objc private func switchAction(_ sender: AnyObject) {
@@ -512,20 +510,33 @@ fileprivate class SubStyleView: NSView {
   }
 
   private func updateScale() {
-    let subFont = player.mpv.getString(MPVOption.Subtitles.subFont) ??
-      NSLocalizedString("sidebar.font", comment: "");
-    fontChooser.title = subFont
+    // mpv does not report the font, so it is read without waiting for mpv and shown once mpv answers.
+    player.mpv.getNodeAsync(MPVOption.Subtitles.subFont) { [weak self] subFont in
+      DispatchQueue.main.async {
+        self?.fontChooser.title = subFont as? String ?? NSLocalizedString("sidebar.font", comment: "")
+      }
+    }
 
-    let currSubScale = player.mpv.getDouble(MPVOption.Subtitles.subScale).clamped(to: 0.1...10)
+    let currSubScale = player.info.subScale.clamped(to: 0.1...10)
     let displaySubScale = Utility.toDisplaySubScale(fromRealSubScale: currSubScale)
     scaleSlider.doubleValue = displaySubScale + (displaySubScale > 0 ? -1 : 1)
   }
 
+  /// Show the text style `mpv` has, read without waiting for `mpv` since it reports none of it.
   private func updateTextStyle() {
-    let fontSize = player.mpv.getInt(MPVOption.Subtitles.subFontSize)
-    fontSizePicker.selectItem(withTitle: fontSize.description)
+    let names = [MPVOption.Subtitles.subFontSize, MPVOption.Subtitles.subOutlineSize, MPVOption.Subtitles.subColor,
+                 MPVOption.Subtitles.subOutlineColor, MPVOption.Subtitles.subBackColor]
+    player.mpv.getNodesAsync(names) { [weak self] values in
+      DispatchQueue.main.async { self?.showTextStyle(values) }
+    }
+  }
 
-    let borderWidth = player.mpv.getDouble(MPVOption.Subtitles.subOutlineSize)
+  private func showTextStyle(_ values: [Any?]) {
+    if let fontSize = values[0] as? Double {
+      fontSizePicker.selectItem(withTitle: Int(fontSize).description)
+    }
+
+    let borderWidth = values[1] as? Double
     borderSizePicker.selectItem(at: -1)
     borderSizePicker.itemArray.forEach { item in
       if borderWidth == Double(item.title) {
@@ -533,12 +544,8 @@ fileprivate class SubStyleView: NSView {
       }
     }
 
-    for (op, colorWell) in [
-      (MPVOption.Subtitles.subColor, textColorWell),
-      (MPVOption.Subtitles.subOutlineColor, borderColorWell),
-      (MPVOption.Subtitles.subBackColor, backgroundColorWell),
-    ] {
-      if let colorString = player.mpv.getString(op), let color = NSColor(mpvColorString: colorString) {
+    for (value, colorWell) in zip(values[2...], [textColorWell, borderColorWell, backgroundColorWell]) {
+      if let colorString = value as? String, let color = NSColor(mpvColorString: colorString) {
         colorWell?.color = color
       }
     }

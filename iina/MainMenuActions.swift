@@ -192,11 +192,11 @@ extension MainMenuActionHandler {
   }
 
   @objc func menuNextChapter(_ sender: NSMenuItem) {
-    player.mpv.command(.add, args: ["chapter", "1"], checkError: false)
+    player.mpv.asyncCommand(.add, args: ["chapter", "1"], checkError: false, replyUserdata: 0)
   }
 
   @objc func menuPreviousChapter(_ sender: NSMenuItem) {
-    player.mpv.command(.add, args: ["chapter", "-1"], checkError: false)
+    player.mpv.asyncCommand(.add, args: ["chapter", "-1"], checkError: false, replyUserdata: 0)
   }
 }
 
@@ -377,7 +377,7 @@ extension MainMenuActionHandler {
     }
     // FIXME: better refactor this part
     let amount = sender.tag > 0 ? 0.1 : -0.1
-    let currentScale = player.mpv.getDouble(MPVOption.Subtitles.subScale)
+    let currentScale = player.info.subScale
     let displayValue = currentScale >= 1 ? currentScale : -1/currentScale
     let truncated = round(displayValue * 100) / 100
     var newTruncated = truncated + amount
@@ -463,9 +463,9 @@ extension MainMenuActionHandler {
 
   @objc func menuCycleTrack(_ sender: NSMenuItem) {
     switch sender.tag {
-    case 0: player.mpv.command(.cycle, args: ["video"])
-    case 1: player.mpv.command(.cycle, args: ["audio"])
-    case 2: player.mpv.command(.cycle, args: ["sub"])
+    case 0: player.mpv.asyncCommand(.cycle, args: ["video"], replyUserdata: 0)
+    case 1: player.mpv.asyncCommand(.cycle, args: ["audio"], replyUserdata: 0)
+    case 2: player.mpv.asyncCommand(.cycle, args: ["sub"], replyUserdata: 0)
     default: break
     }
   }

@@ -70,9 +70,8 @@ class MainWindowController: PlayerWindowController {
   /// For hiding camera housing only in legacy full screen.
   var cameraHousingWindow: NSWindow?
 
-  lazy var rotation: Int = {
-    return player.mpv.getInt(MPVProperty.videoParamsRotate)
-  }()
+  /// The rotation of the video params `mpv` last reported.
+  var rotation: Int { player.info.videoParamsRotation }
 
 
   var videoViewContainer: NSView!

@@ -1415,7 +1415,6 @@ class MPVController: NSObject {
         break
       }
       DispatchQueue.main.async { [self] in
-        player.mainWindow.rotation = rotation
         player.info.videoParamsRotation = rotation
       }
 
