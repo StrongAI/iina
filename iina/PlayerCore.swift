@@ -3316,34 +3316,37 @@ class PlayerCore: NSObject {
       log("...stopped because cannot get file path", level: .warning)
       return
     }
-    if !Preference.bool(for: .enableThumbnailForRemoteFiles) {
-      if let attrs = try? url.resourceValues(forKeys: Set([.volumeIsLocalKey])), !attrs.volumeIsLocal! {
-        log("...stopped because file is on a mounted remote drive", level: .warning)
-        return
+    let cacheName = info.mpvMd5
+    // Whether the file is on a remote volume and whether its thumbnails are cached are read from the file system off the main thread.
+    // The thumbnail queue is serial, so files are checked, and their thumbnails read or asked for, in the order they are asked.
+    thumbnailQueue.async { [self] in
+      if !Preference.bool(for: .enableThumbnailForRemoteFiles) {
+        if let attrs = try? url.resourceValues(forKeys: Set([.volumeIsLocalKey])), !attrs.volumeIsLocal! {
+          log("...stopped because file is on a mounted remote drive", level: .warning)
+          return
+        }
       }
-    }
-    if Preference.bool(for: .enableThumbnailPreview) {
-      if let cacheName = info.mpvMd5, ThumbnailCache.fileIsCached(forName: cacheName, forVideo: info.currentURL) {
-        log("Found thumbnail cache")
-        thumbnailQueue.async {
+      if Preference.bool(for: .enableThumbnailPreview) {
+        if let cacheName, ThumbnailCache.fileIsCached(forName: cacheName, forVideo: url) {
+          log("Found thumbnail cache")
           if let thumbnails = ThumbnailCache.read(forName: cacheName) {
-            self.info.thumbnails = thumbnails
-            self.info.thumbnailsReady = true
-            self.info.thumbnailsProgress = 1
-            self.refreshTouchBarSlider()
+            info.thumbnails = thumbnails
+            info.thumbnailsReady = true
+            info.thumbnailsProgress = 1
+            refreshTouchBarSlider()
             // OSC thumbnails may be used in Now Playing. Notify the manager thumbnails are now
             // available.
             DispatchQueue.main.async { NowPlayingInfoManager.shared.updateInfo() }
           } else {
-            self.log("Cannot read thumbnail from cache", level: .error)
+            log("Cannot read thumbnail from cache", level: .error)
           }
+        } else {
+          log("Request new thumbnails")
+          ffmpegController.generateThumbnail(
+            forFile: url.path,
+            thumbWidth:Int32(Preference.integer(for: .thumbnailWidth)) * 2
+          )
         }
-      } else {
-        log("Request new thumbnails")
-        ffmpegController.generateThumbnail(
-          forFile: url.path,
-          thumbWidth:Int32(Preference.integer(for: .thumbnailWidth)) * 2
-        )
       }
     }
   }
