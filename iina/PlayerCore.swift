@@ -2281,25 +2281,28 @@ class PlayerCore: NSObject {
     info.justStartedFile = true
     info.disableOSDForFileLoading = true
 
+    // mpv starts files, not folders, so a local path is made a URL without the file system being asked whether it is a folder.
     info.currentURL = path.contains("://") ?
       URL(string: path.addingPercentEncoding(withAllowedCharacters: .urlAllowed) ?? path) :
-      URL(fileURLWithPath: path)
+      URL(fileURLWithPath: path, isDirectory: false)
     if let url = info.currentURL {
       info.mpvMd5 = Utility.mpvWatchLaterMd5(url, ignorePathInWatchLaterConfig)
     }
     info.isNetworkResource = !info.currentURL!.isFileURL
 
-    // set "date last opened" attribute
+    // set "date last opened" attribute, off the main thread since it writes to the file
     if let url = info.currentURL, url.isFileURL {
       let time = Date().timeIntervalSince1970
-      // Data mimics timespec struct
-      let ts = [UInt64(time), UInt64(time.truncatingRemainder(dividingBy: 1) * 1_000_000_000)]
-      let data = Data(bytesOf: ts)
-      // set the attribute; the key is undocumented
-      let name = "com.apple.lastuseddate#PS"
-      url.withUnsafeFileSystemRepresentation { fileSystemPath in
-        let _ = data.withUnsafeBytes {
-          setxattr(fileSystemPath, name, $0.baseAddress, data.count, 0, 0)
+      backgroundQueue.async {
+        // Data mimics timespec struct
+        let ts = [UInt64(time), UInt64(time.truncatingRemainder(dividingBy: 1) * 1_000_000_000)]
+        let data = Data(bytesOf: ts)
+        // set the attribute; the key is undocumented
+        let name = "com.apple.lastuseddate#PS"
+        url.withUnsafeFileSystemRepresentation { fileSystemPath in
+          let _ = data.withUnsafeBytes {
+            setxattr(fileSystemPath, name, $0.baseAddress, data.count, 0, 0)
+          }
         }
       }
     }
