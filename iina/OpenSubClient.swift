@@ -94,7 +94,9 @@ class OpenSubClient {
   /// - Important: As discussed in the documentation for the
   ///     [login](https://opensubtitles.stoplight.io/docs/opensubtitles-api/73acf79accc0a-login)
   ///     method Open Subtitles may direct the client to use a different host for further API requests.
-  private var apiBaseURL: URL
+  ///
+  /// It is not private so that tests can send the requests to a local server in place of Open Subtitles.
+  var apiBaseURL: URL
   
   /// Hostname to initially use to access the REST API.
   private let apiDefaultHostname = "api.opensubtitles.com"

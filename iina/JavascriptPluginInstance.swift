@@ -112,7 +112,7 @@ class JavascriptPluginInstance {
   @discardableResult
   func evaluateFile(_ url: URL, asModule: Bool = false) -> JSValue! {
     currentFileStack.append(url)
-    guard let content = try? String(contentsOf: url) else {
+    guard let content = plugin.entryScripts[url] ?? (try? String(contentsOf: url)) else {
       Logger.log("Cannot read script \(url.path)", level: .error, subsystem: subsystem)
       return JSValue(nullIn: js)
     }

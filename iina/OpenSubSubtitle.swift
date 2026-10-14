@@ -139,12 +139,15 @@ class OpenSub {
 
     static let shared = Fetcher()
 
+    /// The serial queue the media file is hashed on, so that the main thread does not wait for the file to be read.
+    static let hashQueue = DispatchQueue(label: "IINAOpenSubHash", qos: .userInitiated)
+
     func fetch(from url: URL, withProviderID id: String, playerCore player: PlayerCore) -> Promise<[Subtitle]> {
       return login().then { _ in
         self.obtainLanguageCodes()
         }.then {
           self.filterLanguageCodes()
-        }.then {
+        }.then(on: Fetcher.hashQueue) {
           self.hash(url)
         }.then { hash in
           self.searchForSubtitles(url, hash, player.getMediaTitle())
@@ -210,26 +213,34 @@ class OpenSub {
     ///   - username: User name to test or `nil`.
     ///   - password: Password when testing credentials or `nil`.
     func login(testUser username: String? = nil, password: String? = nil) -> Promise<Void> {
-      var finalUser: String? = username
-      var finalPw: String? = password
-      if finalUser == nil || finalPw == nil {
+      var credentials: Promise<(user: String?, password: String?)> = .value((username, password))
+      if username == nil || password == nil {
         // check logged in
         if OpenSubClient.shared.loggedIn {
           log("Already logged in to Open Subtitles")
           return .value
         }
-        // read password
-        if let udUsername = Preference.string(for: .openSubUsername), !udUsername.isEmpty {
-          if let (_, readPassword) = try? KeychainAccess.read(username: udUsername, forService: .openSubAccount) {
-            finalUser = udUsername
-            finalPw = readPassword
+        // The password is read on the Keychain's queue, so that the caller does not wait for securityd or a Keychain access prompt.
+        let udUsername = Preference.string(for: .openSubUsername)
+        credentials = KeychainAccess.queue.async(.promise) { () -> (user: String?, password: String?) in
+          if let udUsername, !udUsername.isEmpty,
+             let (_, readPassword) = try? KeychainAccess.read(username: udUsername, forService: .openSubAccount) {
+            return (udUsername, readPassword)
           }
+          return (username, password)
         }
       }
-      guard let finalUser, let finalPw else {
-        log("An Open Subtitles account has not been configured")
-        return .value
+      return credentials.then { credentials -> Promise<Void> in
+        guard let finalUser = credentials.user, let finalPw = credentials.password else {
+          log("An Open Subtitles account has not been configured")
+          return .value
+        }
+        return self.login(username: finalUser, password: finalPw)
       }
+    }
+
+    /// Log in to [Open Subtitles](https://www.opensubtitles.com/) with the given credentials.
+    private func login(username finalUser: String, password finalPw: String) -> Promise<Void> {
       return OpenSubClient.shared.login(username: finalUser, password: finalPw).then { response in
         Promise { resolver in
           let allowedDownloads = String(response.user.allowedDownloads)

@@ -102,9 +102,19 @@ class PrefSubViewController: PreferenceViewController, PreferenceWindowEmbeddabl
         self.loginIndicator.startAnimation(nil)
         firstly {
           OpenSub.Fetcher.shared.login(testUser: username, password: password)
-        }.map { _ in
+        }.then { _ in
+          // The password is written on the Keychain's queue, so that the main thread does not wait for securityd.
+          KeychainAccess.queue.async(.promise) { () -> Error? in
+            do {
+              try KeychainAccess.write(username: username, password: password, forService: .openSubAccount)
+              return nil
+            } catch {
+              return error
+            }
+          }
+        }.map { error in
           do {
-            try KeychainAccess.write(username: username, password: password, forService: .openSubAccount)
+            if let error { throw error }
             Preference.set(username, for: .openSubUsername)
           } catch KeychainAccess.KeychainError.noResult {
             Utility.showAlert("sub.cannot_save_passwd", arguments: ["Cannot find password."], sheetWindow: self.view.window)

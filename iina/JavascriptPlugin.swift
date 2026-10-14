@@ -181,6 +181,21 @@ class JavascriptPlugin: NSObject {
     UserDefaults.standard.set((values ?? plugins).map({ $0.identifier }), forKey: "PluginOrder")
   }
 
+  /// The serial queue plugins are downloaded, unpacked, read and moved on, so that the main thread does not wait for the network,
+  /// for the processes that unpack them or for the file system.
+  static let installQueue = DispatchQueue(label: "IINAPluginInstall", qos: .userInitiated)
+
+  /// Run `work` on `installQueue` and hand back what it returns or throws.
+  static func onInstallQueue<T>(_ work: @escaping () throws -> T) async throws -> T {
+    try await withCheckedThrowingContinuation { continuation in
+      installQueue.async { continuation.resume(with: Result { try work() }) }
+    }
+  }
+
+  /// Makes each HTTP GET request of finding, downloading and updating a plugin on GitHub, waiting for its answer. It exists so that
+  /// tests can answer the requests in its place, without the network.
+  static var getFromGitHub: (String) -> HTTPResult = { Just.get($0) }
+
   @discardableResult
   static func create(fromPackageURL url: URL) throws -> JavascriptPlugin {
     guard FileManager.default.fileExists(atPath: url.path) else {
@@ -264,7 +279,7 @@ class JavascriptPlugin: NSObject {
     
     // If there is a iinaplgz file inside the latest release, use the plgz file
     
-    let response = Just.get("https://api.github.com/repos\(url.path)/releases/latest")
+    let response = getFromGitHub("https://api.github.com/repos\(url.path)/releases/latest")
 
     if response.ok,
        let json = response.json as? [String: Any],
@@ -275,7 +290,7 @@ class JavascriptPlugin: NSObject {
       do {
         let plgzName = plgzItem["name"] as! String
         let destURL = Utility.tempDirURL.appendingPathComponent(plgzName)
-        let downloadResponse = Just.get(dlURL)
+        let downloadResponse = getFromGitHub(dlURL)
         try downloadResponse.content?.write(to: destURL)
         return try create(fromPackageURL: destURL)
       } catch {
@@ -452,7 +467,13 @@ class JavascriptPlugin: NSObject {
     super.init()
 
     if (enabled) {
-      registerSubProviders()
+      // A plugin is made on `installQueue` when it is installed or updated, while the subtitle providers are registered on the main
+      // thread, where they are read.
+      if Thread.isMainThread {
+        registerSubProviders()
+      } else {
+        DispatchQueue.main.async { self.registerSubProviders() }
+      }
     }
     Logger.log("Loaded JS plugin: \(name) \(version)\(enabled ? "" : " (disabled)")")
   }
@@ -494,7 +515,23 @@ class JavascriptPlugin: NSObject {
       self.preferencesPageURL = resolvePath(preferencesPage, root: root)
       self.helpPageURL = resolvePath(helpPage, root: root, allowNetwork: true)
     } catch let error {
-      Utility.showAlert(error.localizedDescription)
+      // The plugin is moved on `installQueue` when it is updated, while the alert is shown on the main thread.
+      if Thread.isMainThread {
+        Utility.showAlert(error.localizedDescription)
+      } else {
+        DispatchQueue.main.async { Utility.showAlert(error.localizedDescription) }
+      }
+    }
+  }
+
+  /// The entry scripts read on `installQueue` for the instances made once the plugin is updated, by the URL of each script. An
+  /// instance whose entry script is not here reads it from its file.
+  var entryScripts: [URL: String] = [:]
+
+  /// Read the entry scripts of the plugin into `entryScripts`.
+  func readEntryScripts() {
+    for url in [entryURL, globalEntryURL].compactMap({ $0 }) {
+      entryScripts[url] = try? String(contentsOf: url)
     }
   }
 
@@ -514,7 +551,9 @@ class JavascriptPlugin: NSObject {
         continuation.resume(returning: nil)
         return
       }
-      Just.get("https://raw.githubusercontent.com/\(ghRepo)/main/Info.json", asyncCompletionHandler:  { result in
+      // The request waits for its answer, so it is made off the main thread.
+      DispatchQueue.global(qos: .userInitiated).async {
+        let result = JavascriptPlugin.getFromGitHub("https://raw.githubusercontent.com/\(ghRepo)/main/Info.json")
         if result.ok,
            let json = result.json as? [String: Any],
            let newGHVersion = json["ghVersion"] as? Int,
@@ -527,18 +566,23 @@ class JavascriptPlugin: NSObject {
         } else {
           continuation.resume(throwing: PluginError.cannotDownload(result.description, result.text ?? ""))
         }
-      })
+      }
     }
   }
 
-  func updated() throws -> JavascriptPlugin? {
+  /// The updated plugin, downloaded from GitHub and unpacked on `installQueue`, so that the caller does not wait for the network,
+  /// the processes that unpack it or the file system.
+  func updated() async throws -> JavascriptPlugin? {
     if let ghURL = githubURLString {
-      let plugin = try JavascriptPlugin.create(fromGitURL: ghURL)
-      guard plugin.identifier == identifier else {
-        Logger.log("The updated plugin has an identifier \(plugin.identifier), which doesn't match the current one (\(identifier))", level: .error)
-        throw PluginError.cannotLoadPlugin
+      let identifier = identifier
+      return try await JavascriptPlugin.onInstallQueue {
+        let plugin = try JavascriptPlugin.create(fromGitURL: ghURL)
+        guard plugin.identifier == identifier else {
+          Logger.log("The updated plugin has an identifier \(plugin.identifier), which doesn't match the current one (\(identifier))", level: .error)
+          throw PluginError.cannotLoadPlugin
+        }
+        return plugin
       }
-      return plugin
     }
     return nil
   }
@@ -560,15 +604,24 @@ class JavascriptPlugin: NSObject {
     return url.appendingPathComponent("\(identifier).plist", isDirectory: false)
   }
 
+  /// The URL of `dataURL`, without the folder being created.
+  var dataFolderURL: URL {
+    Utility.pluginsURL.appendingPathComponent(".data", isDirectory: true).appendingPathComponent(identifier, isDirectory: true)
+  }
+
+  /// The URL of `tmpURL`, without the folder being created.
+  var tmpFolderURL: URL {
+    Utility.tempDirURL.appendingPathComponent("iina-\(identifier)", isDirectory: true)
+  }
+
   lazy var dataURL: URL = {
-    let url = Utility.pluginsURL.appendingPathComponent(".data", isDirectory: true)
-      .appendingPathComponent(identifier, isDirectory: true)
+    let url = dataFolderURL
     Utility.createDirIfNotExist(url: url)
     return url
   }()
 
   lazy var tmpURL: URL = {
-    let url = Utility.tempDirURL.appendingPathComponent("iina-\(identifier)", isDirectory: true)
+    let url = tmpFolderURL
     Utility.createDirIfNotExist(url: url)
     return url
   }()

@@ -103,60 +103,16 @@ class JavascriptAPIUtils: JavascriptAPI, JavascriptAPIUtilsExportable {
     }
 
     return createPromise { [unowned self] resolve, reject in
-      var path = ""
-      var args = args
-      if !file.contains("/") {
-        if let url = searchBinary(file, in: Utility.binariesURL) ?? searchBinary(file, in: Utility.exeDirURL) {
-          // a binary included in IINA's bundle?
-          if #available(macOS 13.0, *) {
-            path = url.path(percentEncoded: false)
-          } else {
-            path = url.path
-          }
-        } else {
-          // assume it's a system command
-          args.insert(file, at: 0)
-        }
-      } else {
-        // it should be an existing file
-        if file.first == "/" {
-          // an absolute path?
-          path = file
-        } else {
-          path = parsePath(file).path ?? ""
-        }
-        // make sure the file exists
-        guard FileManager.default.fileExists(atPath: path) else {
-          reject.call(withArguments: [-1, "Cannot find the binary \(file)"])
-          return
-        }
+      // The paths are expanded, and the plugin's folders and log subsystem read, on the script's thread, which they belong to.
+      // A named path that is not absolute is expanded here, so that it can report an invalid path to the script.
+      let namedPath: String? = file.contains("/") ? (file.first == "/" ? file : parsePath(file).path ?? "") : nil
+      var cwdPath: String?
+      if let cwd, cwd.isString {
+        cwdPath = parsePath(cwd.toString()).path
       }
-
-      // If this binary belongs to the plugin but doesn't have exec permission, try fix it
-      if !FileManager.default.isExecutableFile(atPath: path) && (
-        path.hasPrefix(self.pluginInstance.plugin.dataURL.path) ||
-        path.hasPrefix(self.pluginInstance.plugin.tmpURL.path)) {
-        do {
-          try FileManager.default.setAttributes([.posixPermissions: NSNumber(integerLiteral: 0o755)], ofItemAtPath: path)
-        } catch {
-          reject.call(withArguments: [-2, "The binary is not executable, and execute permission cannot be added"])
-          return
-        }
-      }
-
-      let (stdout, stderr) = (Pipe(), Pipe())
-      let process = Process()
-      process.environment = ["LC_ALL": "en_US.UTF-8"]
-      process.launchPath = path
-      process.arguments = args
-      if let cwd, cwd.isString, let cwdPath = parsePath(cwd.toString()).path {
-        process.currentDirectoryPath = cwdPath
-      }
-      process.standardOutput = stdout
-      process.standardError = stderr
-
-      var stdoutContent = ""
-      var stderrContent = ""
+      let plugin = self.pluginInstance.plugin!
+      let pluginFolders = [plugin.dataFolderURL.path, plugin.tmpFolderURL.path]
+      let subsystem = self.pluginInstance.subsystem
       var stdoutHook: JSValue?
       var stderrHook: JSValue?
       if let hookVal = stdoutHook_, hookVal.isObject {
@@ -166,25 +122,77 @@ class JavascriptAPIUtils: JavascriptAPI, JavascriptAPIUtilsExportable {
         stderrHook = hookVal
       }
 
-      stdout.fileHandleForReading.readabilityHandler = { file in
-        guard let output = String(data: file.availableData, encoding: .utf8) else { return }
-        stdoutContent += output
-        stdoutHook?.call(withArguments: [output])
-      }
-      stderr.fileHandleForReading.readabilityHandler = { file in
-        guard let output = String(data: file.availableData, encoding: .utf8) else { return }
-        stderrContent += output
-        stderrHook?.call(withArguments: [output])
-      }
-      Logger.log("Executing \(path) \(args.joined(separator: " "))", subsystem: pluginInstance.subsystem)
-      do {
-        try process.run()
-      } catch {
-        reject.call(withArguments: ["Execution failed reporting: \(error.localizedDescription)"])
-        return
-      }
-
+      // The binary is looked up, its permission fixed and its process started on the plugin's queue, so that the script's thread does
+      // not wait for the file system or for the process to be spawned. The promise is settled on the main thread.
       self.pluginInstance.queue.async {
+        var path = ""
+        var args = args
+        if let namedPath {
+          // it should be an existing file
+          path = namedPath
+          // make sure the file exists
+          guard FileManager.default.fileExists(atPath: path) else {
+            DispatchQueue.main.async { reject.call(withArguments: [-1, "Cannot find the binary \(file)"]) }
+            return
+          }
+        } else {
+          if let url = searchBinary(file, in: Utility.binariesURL) ?? searchBinary(file, in: Utility.exeDirURL) {
+            // a binary included in IINA's bundle?
+            if #available(macOS 13.0, *) {
+              path = url.path(percentEncoded: false)
+            } else {
+              path = url.path
+            }
+          } else {
+            // assume it's a system command
+            args.insert(file, at: 0)
+          }
+        }
+
+        // If this binary belongs to the plugin but doesn't have exec permission, try fix it
+        if !FileManager.default.isExecutableFile(atPath: path) && pluginFolders.contains(where: { path.hasPrefix($0) }) {
+          do {
+            try FileManager.default.setAttributes([.posixPermissions: NSNumber(integerLiteral: 0o755)], ofItemAtPath: path)
+          } catch {
+            DispatchQueue.main.async {
+              reject.call(withArguments: [-2, "The binary is not executable, and execute permission cannot be added"])
+            }
+            return
+          }
+        }
+
+        let (stdout, stderr) = (Pipe(), Pipe())
+        let process = Process()
+        process.environment = ["LC_ALL": "en_US.UTF-8"]
+        process.launchPath = path
+        process.arguments = args
+        if let cwdPath {
+          process.currentDirectoryPath = cwdPath
+        }
+        process.standardOutput = stdout
+        process.standardError = stderr
+
+        var stdoutContent = ""
+        var stderrContent = ""
+
+        stdout.fileHandleForReading.readabilityHandler = { file in
+          guard let output = String(data: file.availableData, encoding: .utf8) else { return }
+          stdoutContent += output
+          stdoutHook?.call(withArguments: [output])
+        }
+        stderr.fileHandleForReading.readabilityHandler = { file in
+          guard let output = String(data: file.availableData, encoding: .utf8) else { return }
+          stderrContent += output
+          stderrHook?.call(withArguments: [output])
+        }
+        Logger.log("Executing \(path) \(args.joined(separator: " "))", subsystem: subsystem)
+        do {
+          try process.run()
+        } catch {
+          DispatchQueue.main.async { reject.call(withArguments: ["Execution failed reporting: \(error.localizedDescription)"]) }
+          return
+        }
+
         process.waitUntilExit()
         stderr.fileHandleForReading.readabilityHandler = nil
         stdout.fileHandleForReading.readabilityHandler = nil

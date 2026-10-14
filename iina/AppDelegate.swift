@@ -270,36 +270,47 @@ class AppDelegate: NSObject, NSApplicationDelegate, SPUUpdaterDelegate {
 
     // Install plugins
     if FirstRunManager.isFirstRun(for: .init("installedDefaultPlugins")) {
-      var hasError = false
       Logger.log("Installing default plugins")
-      if let pluginPath = Bundle.main.resourcePath?.appending("/plugins"),
-         FileManager.default.fileExists(atPath: pluginPath),
-         let contents = try? FileManager.default.contentsOfDirectory(atPath: pluginPath) {
-        contents.filter { $0.hasSuffix(".iinaplgz") }
-          .forEach {
-            do {
-              let path = pluginPath.appending("/\($0)")
-              let plugin = try JavascriptPlugin.create(fromPackageURL: URL(fileURLWithPath: path))
-              if JavascriptPlugin.plugins.contains(where: { $0.identifier == plugin.identifier }) {
-                Logger.log("Skipped \(plugin.identifier), already installed")
-                return
+      // The default plugins are found and unpacked on the plugin install queue, so that the main thread does not wait for the file
+      // system or for the processes that unpack them. They are added to the plugin list and enabled on the main thread, which the
+      // list and the plugins' instances belong to.
+      JavascriptPlugin.installQueue.async {
+        var hasError = false
+        var plugins: [JavascriptPlugin] = []
+        if let pluginPath = Bundle.main.resourcePath?.appending("/plugins"),
+           FileManager.default.fileExists(atPath: pluginPath),
+           let contents = try? FileManager.default.contentsOfDirectory(atPath: pluginPath) {
+          contents.filter { $0.hasSuffix(".iinaplgz") }
+            .forEach {
+              do {
+                let path = pluginPath.appending("/\($0)")
+                plugins.append(try JavascriptPlugin.create(fromPackageURL: URL(fileURLWithPath: path)))
+              } catch let error {
+                hasError = true
+                Logger.log(error.localizedDescription, level: .error)
               }
-              plugin.normalizePath()
-              JavascriptPlugin.plugins.append(plugin)
-              plugin.enabled = true
-              Logger.log("Installed \(plugin.identifier)")
-            } catch let error {
-              hasError = true
-              Logger.log(error.localizedDescription, level: .error)
             }
-          }
-      } else {
-        hasError = true
-        Logger.log("Cannot find default plugins", level: .error)
-      }
+        } else {
+          hasError = true
+          Logger.log("Cannot find default plugins", level: .error)
+        }
 
-      if hasError {
-        FirstRunManager.unsetFirstRun(for: .init("installedDefaultPlugins"))
+        DispatchQueue.main.async { [plugins, hasError] in
+          for plugin in plugins {
+            if JavascriptPlugin.plugins.contains(where: { $0.identifier == plugin.identifier }) {
+              Logger.log("Skipped \(plugin.identifier), already installed")
+              continue
+            }
+            plugin.normalizePath()
+            JavascriptPlugin.plugins.append(plugin)
+            plugin.enabled = true
+            Logger.log("Installed \(plugin.identifier)")
+          }
+
+          if hasError {
+            FirstRunManager.unsetFirstRun(for: .init("installedDefaultPlugins"))
+          }
+        }
       }
     }
 

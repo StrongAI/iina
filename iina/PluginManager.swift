@@ -61,7 +61,7 @@ class PluginManager {
       }
 
       // install update
-      guard let newPlugin = try plugin.updated() else {
+      guard let newPlugin = try await plugin.updated() else {
         return (.cancelled, nil)
       }
 
@@ -71,12 +71,23 @@ class PluginManager {
         permissionCleared = await showPermissionsSheet(forPlugin: newPlugin, previousPlugin: plugin)
       }
       if permissionCleared {
-        if let pos = plugin.remove() {
+        // The old plugin's files are removed, and the new plugin is moved to their place and its entry scripts are read, on the
+        // install queue, so that the main thread does not wait for the file system. The plugin list and the instances, which the
+        // windows and the players use, are changed on the main thread once that is done.
+        let oldRoot = plugin.root
+        try await JavascriptPlugin.onInstallQueue {
+          try? FileManager.default.removeItem(at: oldRoot)
+          newPlugin.normalizePath()
+          newPlugin.readEntryScripts()
+        }
+        if let pos = JavascriptPlugin.plugins.firstIndex(of: plugin) {
+          JavascriptPlugin.plugins.remove(at: pos)
           JavascriptPlugin.plugins.insert(newPlugin, at: pos)
         }
-        newPlugin.normalizePath()
         newPlugin.reloadGlobalInstance()
         PlayerCore.reloadPluginForAll(newPlugin, forced: true)
+        // Instances made from here on read their entry scripts from the files.
+        newPlugin.entryScripts = [:]
         return (.installed, newPlugin)
       }
       return (.cancelled, nil)
@@ -155,12 +166,17 @@ class PluginManager {
   @MainActor
   func install(gitHubString string: String? = nil, localPackageURL url: URL? = nil, handler: ((Result) -> Void)? = nil) async {
     do {
-      let plugin = if let string {
-        try JavascriptPlugin.create(fromGitURL: string)
-      } else if let url {
-        try JavascriptPlugin.create(fromPackageURL: url)
-      } else {
+      guard string != nil || url != nil else {
         fatalError("PluginManager.install: a source must be provided.")
+      }
+      // The plugin is downloaded, unpacked and read on the install queue, so that the main thread does not wait for the network, the
+      // processes that unpack it or the file system.
+      let plugin = try await JavascriptPlugin.onInstallQueue {
+        if let string {
+          try JavascriptPlugin.create(fromGitURL: string)
+        } else {
+          try JavascriptPlugin.create(fromPackageURL: url!)
+        }
       }
       let res = await install(plugin)
       handler?(res)
