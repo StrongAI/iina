@@ -1514,11 +1514,7 @@ class RemoteCommandController {
       return .success
     }
     remoteCommand.stopCommand.addTarget { _ in
-      if let action = PlayerCore.keyBindings["STOP"] {
-        PlayerCore.lastActive.mainWindow.handleKeyBinding(action)
-      } else {
-        PlayerCore.lastActive.stop()
-      }
+      RemoteCommandController.stop()
       return .success
     }
     remoteCommand.nextTrackCommand.addTarget { _ in
@@ -1575,6 +1571,15 @@ class RemoteCommandController {
   /// Play the last active player at `rate`, as the change playback rate command asks, without waiting for mpv.
   static func changePlaybackRate(_ rate: Float) {
     PlayerCore.lastActive.setSpeed(Double(rate))
+  }
+
+  /// Stop the last active player, as the stop command asks, without waiting for mpv, unless a key binding is bound to `STOP`.
+  static func stop() {
+    if let action = PlayerCore.keyBindings["STOP"] {
+      PlayerCore.lastActive.mainWindow.handleKeyBinding(action)
+    } else {
+      PlayerCore.lastActive.stop()
+    }
   }
 
   // MARK: - Private Functions

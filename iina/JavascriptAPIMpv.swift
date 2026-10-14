@@ -30,6 +30,9 @@ class JavascriptAPIMpv: JavascriptAPI, JavascriptAPIMpvExportable {
     player!.mpv.removeHooks(withIdentifier: identifier)
   }
 
+  // The getters wait for mpv on the calling thread, the main thread for most plugin scripts. They return the value of any property
+  // to the script at once, which a value mpv has already reported cannot do for the properties IINA does not observe, and answering
+  // asynchronously would change the plugin API, so they are kept waiting by the user's ruling.
   @objc func getFlag(_ property: String) -> Bool {
     return player!.mpv.getFlag(property)
   }

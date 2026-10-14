@@ -1021,28 +1021,39 @@ class PlayerCore: NSObject {
   ///     running when the mpv core is shutdown it may call into mpv triggering a crash.
   func stop() {
     guard info.state != .shutDown else { return }
-    savePlaybackPosition()
-
-    // The player may already be stopped in which case the state must not be set to stopping.
-    if info.state != .idle {
-      // Setting of state must come after saving playback position or that method will not save the
-      // watch later configuration.
-      info.state = .stopping
-
-      // Make sure playback is paused to free up machine resources when quitting.
-      if !mpv.getFlag(MPVOption.PlaybackControl.pause) {
-        log("Pausing playback before sending stop command")
-        mpv.setFlag(MPVOption.PlaybackControl.pause, true, level: .verbose)
+    // What mpv is asked is decided now, from the state the player has when asked to stop. The watch later configuration can only
+    // be written while the player is active, and a player already stopped is neither paused nor sent a stop command.
+    let writesWatchLater = info.state.active
+    let stopsPlayback = info.state != .idle
+    // Must first stop the background task if it is running. The stop command is sent once it has stopped and calls this again.
+    let sendsStop = stopsPlayback && !backgroundTaskInUse
+    // mpv is asked without waiting, once it has answered whether it saves the playback position, to write the watch later
+    // configuration, to pause playback to free up machine resources when quitting, and to stop, in that order, so that the watch
+    // later configuration holds the state playback had.
+    savePlaybackPosition { [self] savesPosition in
+      // The player is no longer stopping if mpv went idle on its own before answering, after which another file may be opening.
+      guard info.state == .stopping else { return }
+      if savesPosition && writesWatchLater {
+        log("Write watch later config")
+        mpv.asyncCommand(.writeWatchLaterConfig, replyUserdata: 0, level: .verbose)
       }
+      log("Pausing playback before sending stop command")
+      mpv.setFlagAsync(MPVOption.PlaybackControl.pause, true, level: .verbose)
+      guard sendsStop else { return }
+      mpv.asyncCommand(.stop, replyUserdata: 0, level: .verbose)
     }
 
-    // Must first stop the background task if it is running.
+    // The player may already be stopped in which case the state must not be set to stopping.
+    if stopsPlayback {
+      info.state = .stopping
+    }
+
     if backgroundTaskInUse {
       stopBackgroundTask()
       return
     }
 
-    if info.state != .idle {
+    if stopsPlayback {
       log("Stopping playback")
     }
     mainWindow.videoView.stopDisplayLink()
@@ -1050,10 +1061,6 @@ class PlayerCore: NSObject {
 
     // Refresh UI synchronization as it will detect the player is stopping and shutdown the timer.
     refreshSyncUITimer()
-
-    // Do not send a stop command to mpv if it is already stopped.
-    guard info.state != .idle else { return }
-    mpv.command(.stop, level: .verbose)
   }
 
   /// Mute or unmute without waiting for `mpv`. With no state given this toggles the state last asked for, which is stored at once
@@ -2196,22 +2203,34 @@ class PlayerCore: NSObject {
     mpv.setStringAsync(MPVOption.Subtitles.subFont, font)
   }
 
-  func savePlaybackPosition() {
-    guard mpv.getFlag(MPVOption.WatchLater.savePositionOnQuit) else { return }
-
-    // The player must be active to be able to save the watch later configuration.
-    if info.state.active {
-      log("Write watch later config")
-      mpv.command(.writeWatchLaterConfig, level: .verbose)
-    }
-    if let url = info.currentURL {
-      Preference.set(url, for: .iinaLastPlayedFilePath)
-      // Write to cache directly (rather than calling `refreshCachedVideoProgress`).
-      // If user only closed the window but didn't quit the app, this can make sure playlist displays the correct progress.
-      info.setCachedVideoDurationAndProgress(url.path, (duration: info.videoDuration?.second, progress: info.videoPosition?.second))
-    }
-    if let position = info.videoPosition?.second {
-      Preference.set(position, for: .iinaLastPlayedFilePosition)
+  /// Store the file played and its position as the last played, if `mpv` saves the playback position on quit, without waiting for
+  /// `mpv`.
+  ///
+  /// Whether `mpv` saves the position is asked without waiting, so `mpv` answers after every change asked of it before. The file, its
+  /// length and the position stored are those the player has when this is called. Writing the watch later configuration of the file
+  /// is left to the caller, which `stop` asks for in `completion`, before its other requests.
+  /// - Parameter completion: Called on the main thread once `mpv` has answered and the position is stored, with whether `mpv`
+  ///     saves the position on quit.
+  func savePlaybackPosition(completion: ((_ savesPosition: Bool) -> Void)? = nil) {
+    let url = info.currentURL
+    let duration = info.videoDuration?.second
+    let position = info.videoPosition?.second
+    mpv.getFlagAsync(MPVOption.WatchLater.savePositionOnQuit) { [self] savesPosition in
+      // On main because PlaybackInfo is confined to the main thread, see MPVController.queue.
+      DispatchQueue.main.async { [self] in
+        if savesPosition == true {
+          if let url {
+            Preference.set(url, for: .iinaLastPlayedFilePath)
+            // Write to cache directly (rather than calling `refreshCachedVideoProgress`).
+            // If user only closed the window but didn't quit the app, this can make sure playlist displays the correct progress.
+            info.setCachedVideoDurationAndProgress(url.path, (duration: duration, progress: position))
+          }
+          if let position {
+            Preference.set(position, for: .iinaLastPlayedFilePosition)
+          }
+        }
+        completion?(savesPosition == true)
+      }
     }
   }
 
