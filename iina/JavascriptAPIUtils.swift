@@ -29,36 +29,53 @@ fileprivate extension Process {
   func ask(_ title: String) -> Bool
   func prompt(_ title: String) -> String?
   func chooseFile(_ title: String, _ options: [String: Any]) -> Any
-  func keychainWrite(_ service: String, _ name: String, _ password: String) -> Any
-  func keychainRead(_ service: String, _ name: String) -> Any
+  func keychainWrite(_ service: String, _ name: String, _ password: String) -> JSValue
+  func keychainRead(_ service: String, _ name: String) -> JSValue
   func open(_ url: String) -> Bool
   func preferredLocalizations() -> Any
 }
 
 class JavascriptAPIUtils: JavascriptAPI, JavascriptAPIUtilsExportable {
-  func keychainWrite(_ service: String, _ name: String, _ password: String) -> Any {
-    if service.isEmpty {
-      return false
-    }
+  func keychainWrite(_ service: String, _ name: String, _ password: String) -> JSValue {
     let serviceName = "\(pluginInstance.plugin.identifier) - \(service)"
-    do {
-      try KeychainAccess.write(username: name, password: password, forService: .init(serviceName))
-      return true
-    } catch {
-      return false
+    return createPromise { resolve, _ in
+      if service.isEmpty {
+        resolve.call(withArguments: [false])
+        return
+      }
+      // The Keychain is written on its queue, so that the script's thread does not wait for securityd or for a Keychain access
+      // prompt. The promise is settled on the main thread.
+      KeychainAccess.queue.async {
+        let written: Bool
+        do {
+          try KeychainAccess.write(username: name, password: password, forService: .init(serviceName))
+          written = true
+        } catch {
+          written = false
+        }
+        DispatchQueue.main.async { resolve.call(withArguments: [written]) }
+      }
     }
   }
   
-  func keychainRead(_ service: String, _ name: String) -> Any {
-    if service.isEmpty {
-      return false
-    }
+  func keychainRead(_ service: String, _ name: String) -> JSValue {
     let serviceName = "\(pluginInstance.plugin.identifier) - \(service)"
-    do {
-      let (_, result) = try KeychainAccess.read(username: name, forService: .init(serviceName))
-      return result
-    } catch {
-      return false
+    return createPromise { resolve, _ in
+      if service.isEmpty {
+        resolve.call(withArguments: [false])
+        return
+      }
+      // The Keychain is read on its queue, so that the script's thread does not wait for securityd or for a Keychain access
+      // prompt. The promise is settled on the main thread.
+      KeychainAccess.queue.async {
+        let result: Any
+        do {
+          result = try KeychainAccess.read(username: name, forService: .init(serviceName)).password
+        } catch {
+          result = false
+        }
+        DispatchQueue.main.async { resolve.call(withArguments: [result]) }
+      }
     }
   }
   
