@@ -324,29 +324,44 @@ class Titlebar: NSView {
 
   override func rightMouseUp(with event: NSEvent) {}
 
-  private func showPathMenu() {
+  func showPathMenu() {
     guard let filename = mainWindow.window?.representedFilename else { return }
+    // The file's folders, their display names and their icons are found on the path queue, so that the main thread does not
+    // wait for the file system or LaunchServices. The menu is built and shown on the main thread.
+    Self.pathQueue.async { [weak self] in
+      let url = URL(fileURLWithPath: filename)
+      var current = url.standardizedFileURL
+      var components: [URL] = []
 
+      while true {
+        components.append(current)
+        let parent = current.deletingLastPathComponent()
+        if parent.path == "/" { break }  // reached root
+        current = parent
+      }
+
+      let items: [(url: URL, name: String, icon: NSImage)] = components.map { pathURL in
+        (pathURL, FileManager.default.displayName(atPath: pathURL.path), NSWorkspace.shared.icon(forFile: pathURL.path))
+      }
+      DispatchQueue.main.async {
+        self?.showPathMenu(items)
+      }
+    }
+  }
+
+  /// The serial queue the path menu's folders, display names and icons are found on.
+  static let pathQueue = DispatchQueue(label: "IINATitlebarPath", qos: .userInitiated)
+
+  /// Show the menu of the file's folders, each with its display name and icon.
+  private func showPathMenu(_ items: [(url: URL, name: String, icon: NSImage)]) {
     let menu = NSMenu()
     menu.autoenablesItems = false
-
-    let url = URL(fileURLWithPath: filename)
     let point = NSPoint(x: -30, y: 0)  // make sure the first menu item is at the title's position
 
-    var current = url.standardizedFileURL
-    var components: [URL] = []
-
-    while true {
-      components.append(current)
-      let parent = current.deletingLastPathComponent()
-      if parent.path == "/" { break }  // reached root
-      current = parent
-    }
-
-    for pathURL in components {
+    for (pathURL, name, icon) in items {
       let item = NSMenuItem()
-      item.title = FileManager.default.displayName(atPath: pathURL.path)
-      item.image = NSWorkspace.shared.icon(forFile: pathURL.path)
+      item.title = name
+      item.image = icon
       item.image?.size = NSSize(width: 16, height: 16)
       item.representedObject = pathURL
       item.target = self

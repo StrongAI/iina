@@ -253,8 +253,18 @@ class SidebarPlaylistPane: NSView, SidebarPane {
 
   @objc func addFileAction(_ sender: AnyObject) {
     Utility.quickMultipleOpenPanel(title: "Add to playlist", canChooseDir: true) { urls in
+      self.addFiles(urls)
+    }
+  }
+
+  /// Add the playable files at the chosen `urls`, searching chosen folders, to the end of the playlist.
+  func addFiles(_ urls: [URL]) {
+    // The chosen folders are searched for playable files on the player's open queue, so that the main thread does not wait
+    // for the file system. The files are added on the main thread.
+    player.openQueue.async {
       let playableFiles = self.player.getPlayableFiles(in: urls)
-      if playableFiles.count != 0 {
+      guard playableFiles.count != 0 else { return }
+      DispatchQueue.main.async {
         self.player.addToPlaylist(paths: playableFiles.map { $0.path },
                                   at: self.player.info.$playlist.withLock { $0.count })
         self.updateTable()
@@ -457,13 +467,19 @@ extension SidebarPlaylistPane: NSTableViewDelegate, NSTableViewDataSource {
   @discardableResult
   func pasteFromPasteboard(row: Int, from pboard: NSPasteboard) -> Bool {
     if let paths = pboard.propertyList(forType: .nsFilenames) as? [String] {
-      let playableFiles = Utility.resolveURLs(player.getPlayableFiles(in: paths.map {
-        $0.hasPrefix("/") ? URL(fileURLWithPath: $0) : URL(string: $0)!
-      }))
-      if playableFiles.count == 0 {
-        return false
+      // The paths are made into URLs, their folders searched for playable files and the files resolved on the player's open
+      // queue, so that the main thread does not wait for the file system. The files are added on the main thread.
+      player.openQueue.async { [self] in
+        let playableFiles = Utility.resolveURLs(player.getPlayableFiles(in: paths.map {
+          $0.hasPrefix("/") ? URL(fileURLWithPath: $0) : URL(string: $0)!
+        }))
+        guard playableFiles.count != 0 else { return }
+        DispatchQueue.main.async { [self] in
+          player.addToPlaylist(paths: playableFiles.map { $0.isFileURL ? $0.path : $0.absoluteString }, at: row)
+          player.postNotification(.iinaPlaylistChanged)
+        }
       }
-      player.addToPlaylist(paths: playableFiles.map { $0.isFileURL ? $0.path : $0.absoluteString }, at: row)
+      return true
     } else if let urls = pboard.propertyList(forType: .nsURL) as? [String] {
       player.addToPlaylist(paths: urls, at: row)
     } else if let droppedString = pboard.string(forType: .string), Regex.url.matches(droppedString) {
@@ -531,13 +547,18 @@ extension SidebarPlaylistPane: NSMenuDelegate, NSMenuItemValidation {
   }
 
   @IBAction func contextMenuPlayInNewWindow(_ sender: NSMenuItem) {
-    let files = {
-      self.player.info.$playlist.withLock { playlist in
-        self.selectedRows!.enumerated().map { (_, i) in
-          URL(fileURLWithPath: playlist[i].filename)
-        }}
-    }()
-    PlayerCore.newPlayerCore.openURLs(files, shouldAutoLoad: false)
+    let filenames = player.info.$playlist.withLock { playlist in
+      self.selectedRows!.map { playlist[$0].filename }
+    }
+    let newPlayer = PlayerCore.newPlayerCore
+    // The paths are made into file URLs on the new player's open queue, so that the main thread does not wait for the file
+    // system to tell whether each is a folder.
+    newPlayer.openQueue.async {
+      let files = filenames.map { URL(fileURLWithPath: $0) }
+      DispatchQueue.main.async {
+        newPlayer.openURLs(files, shouldAutoLoad: false)
+      }
+    }
   }
 
   @IBAction func contextMenuRemove(_ sender: NSMenuItem) {
@@ -549,21 +570,32 @@ extension SidebarPlaylistPane: NSMenuDelegate, NSMenuItemValidation {
     guard let selectedRows else { return }
     Logger.log("User chose to delete files from playlist at indexes: \(selectedRows.map{$0})", subsystem: player.subsystem)
 
-    var successes = IndexSet()
-    for index in selectedRows {
-      let playlistItem = player.info.$playlist.withLock { $0[index] }
-      guard !playlistItem.isNetworkResource else { continue }
-      let url = URL(fileURLWithPath: playlistItem.filename)
-      do {
-        Logger.log("Trashing row \(index): \(url.standardizedFileURL)", subsystem: player.subsystem)
-        try FileManager.default.trashItem(at: url, resultingItemURL: nil)
-        successes.insert(index)
-      } catch let error {
-        Utility.showAlert("playlist.error_deleting", arguments: [error.localizedDescription])
+    // The rows' files are read from the playlist on the main thread, then made into URLs and moved to the Trash on the player's
+    // open queue, so that the main thread does not wait for the file system. The trashed rows are removed on the main thread.
+    let files = player.info.$playlist.withLock { playlist in
+      selectedRows.compactMap { index -> (Int, String)? in
+        playlist[index].isNetworkResource ? nil : (index, playlist[index].filename)
       }
     }
-    if !successes.isEmpty {
-      player.playlistRemove(successes)
+    let subsystem = player.subsystem
+    player.openQueue.async { [self] in
+      var successes = IndexSet()
+      for (index, filename) in files {
+        let url = URL(fileURLWithPath: filename)
+        do {
+          Logger.log("Trashing row \(index): \(url.standardizedFileURL)", subsystem: subsystem)
+          try FileManager.default.trashItem(at: url, resultingItemURL: nil)
+          successes.insert(index)
+        } catch let error {
+          DispatchQueue.main.async {
+            Utility.showAlert("playlist.error_deleting", arguments: [error.localizedDescription])
+          }
+        }
+      }
+      guard !successes.isEmpty else { return }
+      DispatchQueue.main.async { [self] in
+        player.playlistRemove(successes)
+      }
     }
   }
 
@@ -588,13 +620,19 @@ extension SidebarPlaylistPane: NSMenuDelegate, NSMenuItemValidation {
   @IBAction func contextMenuAddSubtitle(_ sender: NSMenuItem) {
     guard let selectedRows, let index = selectedRows.first else { return }
     let filename = player.info.$playlist.withLock { $0[index].filename }
-    let fileURL = URL(fileURLWithPath: filename).deletingLastPathComponent()
-    Utility.quickMultipleOpenPanel(title: NSLocalizedString("alert.choose_media_file.title", comment: "Choose Media File"), dir: fileURL, canChooseDir: true) { subURLs in
-      for subURL in subURLs {
-        guard Utility.supportedFileExt[.sub]!.contains(subURL.pathExtension.lowercased()) else { return }
-        self.player.info.$matchedSubs.withLock { $0[filename, default: []].append(subURL) }
+    // The file's folder is made into a URL on the player's open queue, so that the main thread does not wait for the file
+    // system to tell whether the path is a folder. The open panel is shown on the main thread.
+    player.openQueue.async { [self] in
+      let fileURL = URL(fileURLWithPath: filename).deletingLastPathComponent()
+      DispatchQueue.main.async { [self] in
+        Utility.quickMultipleOpenPanel(title: NSLocalizedString("alert.choose_media_file.title", comment: "Choose Media File"), dir: fileURL, canChooseDir: true) { subURLs in
+          for subURL in subURLs {
+            guard Utility.supportedFileExt[.sub]!.contains(subURL.pathExtension.lowercased()) else { return }
+            self.player.info.$matchedSubs.withLock { $0[filename, default: []].append(subURL) }
+          }
+          self.tableView.reloadData(forRowIndexes: selectedRows, columnIndexes: IndexSet(integersIn: 0...1))
+        }
       }
-      self.tableView.reloadData(forRowIndexes: selectedRows, columnIndexes: IndexSet(integersIn: 0...1))
     }
   }
 

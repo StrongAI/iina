@@ -130,7 +130,8 @@ class Logger: NSObject {
     }
   }
 
-  static let enabled = Preference.bool(for: .enableAdvancedSettings) && Preference.bool(for: .enableLogging)
+  /// Whether messages are written to the log file. Settable so that tests can write to the log file.
+  @Atomic static var enabled = Preference.bool(for: .enableAdvancedSettings) && Preference.bool(for: .enableLogging)
 
   static let logDirectory: URL = {
     // get path
@@ -177,18 +178,20 @@ class Logger: NSObject {
     return formatter
   }()
 
-  // Must coordinate closing of the log file to avoid writing to a closed file handle.
-  private static let lock = Lock()
+  /// The serial queue the log file is opened, written and closed on, in the order asked, so that no caller waits for the file
+  /// system and the file is not written once it is closed.
+  static let fileQueue = DispatchQueue(label: "IINALoggerFile", qos: .utility)
 
   /// Closes the log file, if logging is enabled,
   /// - Important: Currently IINA does not coordinate threads during termination. This results in a race condition as to whether
   ///     a thread will attempt to log a message after the log file has been closed or not.  Previously this was triggering crashes due
-  ///     to writing to a closed file handle. The logger now uses a lock to coordinate closing of the log file. If a log message is logged
-  ///     after the log file is closed it will only be logged to the console.
+  ///     to writing to a closed file handle. The logger now closes the log file on its file queue, after the writes asked before the
+  ///     close. If a log message is logged after the log file is closed it will only be logged to the console.
   static func closeLogFile() {
     guard enabled else { return }
-    // Lock to avoid closing the log file while another thread is writing to it.
-    lock.withLock {
+    // The file is closed on the file queue, after any write in progress, so that the caller does not wait for the write or for the
+    // file to be flushed.
+    fileQueue.async {
       guard let fileHandle = logFileHandle else { return }
       do {
         // The deprecated method is used instead of the new close method that throws swift exceptions
@@ -298,8 +301,9 @@ class Logger: NSObject {
       print(formatMessage("Cannot encode log string!", .error, Logger.loggerSubsystem, false))
       return
     }
-    // Lock to prevent the log file from being closed by another thread while writing to it.
-    lock.withLock() {
+    // The line is written on the file queue, in the order lines are logged, so that the caller does not wait for the file system.
+    // The first write opens the file.
+    fileQueue.async {
       // The logger may be called after it has been closed.
       guard let logFileHandle else { return }
       do {
@@ -337,6 +341,10 @@ class Logger: NSObject {
   ///     and therefore intentionally avoids attempting to log the fatal error message.
   private static func fatalDuringInit(_ message: String) -> Never {
     print(formatMessage(message, .error, Logger.loggerSubsystem, true))
+    // The log file is opened on the file queue, while the alert is shown on the main thread.
+    if !Thread.isMainThread {
+      DispatchQueue.main.sync { showAlertAndExit(message) }
+    }
     showAlertAndExit(message)
   }
 

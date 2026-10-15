@@ -59,9 +59,13 @@ class InitialWindowController: NSWindowController {
     }
   }
 
-  lazy var recentDocuments: [URL] = {
-    makeRecentDocumentsList()
-  }()
+  /// The serial queue the window looks at files on: whether the last played file exists, the paths the recent documents resolve
+  /// to and the icons it shows, so that the main thread does not wait for the file system or LaunchServices.
+  static let fileQueue = DispatchQueue(label: "IINAInitialWindowFiles", qos: .userInitiated)
+
+  /// The recent documents the table lists, which leave out the last played file, and the icon of each, found on `fileQueue`.
+  private(set) var recentDocuments: [URL] = []
+  private var recentDocumentIcons: [NSImage] = []
   private var lastPlaybackURL: URL?
 
   init(playerCore: PlayerCore) {
@@ -130,8 +134,7 @@ class InitialWindowController: NSWindowController {
 
     // header
 
-    let iconImage = NSWorkspace.shared.icon(forFile: Bundle.main.bundlePath)
-    let appIcon = ui.image(iconImage, size: 68)
+    let appIcon = ui.image(nil, size: 68)
     appIcon.translatesAutoresizingMaskIntoConstraints = false
 
     let iinaLabel = NSTextField(labelWithString: "IINA")
@@ -159,6 +162,8 @@ class InitialWindowController: NSWindowController {
     // resume last file
 
     self.lastFileContainerView = InitialWindowViewActionButton()
+    // Hidden until the last played file is found to exist.
+    lastFileContainerView.isHidden = true
     lastFileContainerView.translatesAutoresizingMaskIntoConstraints = false
     lastFileContainerView.size(height: 32)
     self.lastFileIcon = ui.image("clock.arrow.trianglehead.counterclockwise.rotate.90", "clock", size: 16)
@@ -235,6 +240,13 @@ class InitialWindowController: NSWindowController {
       UserDefaults.standard.addObserver(self, forKeyPath: key.rawValue, options: .new, context: nil)
     }
     reloadData()
+
+    // The app's icon is looked up on the file queue, so that the main thread does not wait for LaunchServices.
+    let bundlePath = Bundle.main.bundlePath
+    Self.fileQueue.async {
+      let iconImage = NSWorkspace.shared.icon(forFile: bundlePath)
+      DispatchQueue.main.async { appIcon.image = iconImage }
+    }
   }
 
   @objc private func showBetaInfoPopover(_ sender: NSButton) {
@@ -273,13 +285,6 @@ class InitialWindowController: NSWindowController {
     popover.show(relativeTo: sender.bounds, of: sender, preferredEdge: .maxY)
   }
 
-  private func makeRecentDocumentsList() -> [URL] {
-    // Need to call resolvingSymlinksInPath() on both sides, because it changes "/private/var" to "/var" as a special case,
-    // even though "/var" points to "/private/var" (i.e. it changes it the opposite direction from what is expected).
-    // This is probably a kludge on Apple's part to avoid breaking legacy FreeBSD code.
-    NSDocumentController.shared.recentDocumentURLs.filter { $0.resolvingSymlinksInPath() != lastPlaybackURL?.resolvingSymlinksInPath() }
-  }
-
   private func setMaterial(_ theme: Preference.Theme?) {
     guard let window, let theme else { return }
 
@@ -305,48 +310,63 @@ class InitialWindowController: NSWindowController {
     }
   }
 
-  func loadLastPlaybackInfo() {
-    guard loaded else { return }
-    if Preference.bool(for: .recordRecentFiles),
-      Preference.bool(for: .resumeLastPosition),
-      let lastFile = Preference.url(for: .iinaLastPlayedFilePath),
-      FileManager.default.fileExists(atPath: lastFile.path) {
+  /// Show the last played file, when it exists, and the recent documents with their icons.
+  private func show(lastPlaybackURL: URL?, lastPosition: Double, recentDocuments: [URL], icons: [NSImage]) {
+    self.lastPlaybackURL = lastPlaybackURL
+    if let lastPlaybackURL {
       // if last file exists
-      lastPlaybackURL = lastFile
       lastFileContainerView.isHidden = false
       lastFileIcon.image = .sf("clock.arrow.trianglehead.counterclockwise.rotate.90", "clock")
-      lastFileNameLabel.stringValue = lastFile.lastPathComponent
-      let lastPosition = Preference.double(for: .iinaLastPlayedFilePosition)
+      lastFileNameLabel.stringValue = lastPlaybackURL.lastPathComponent
       lastPositionLabel.stringValue = VideoTime(lastPosition).stringRepresentation
       recentFilesTableTopConstraint.constant = 42 + 18
     } else {
-      lastPlaybackURL = nil
       lastFileContainerView.isHidden = true
       recentFilesTableTopConstraint.constant = 42
+    }
+    self.recentDocuments = recentDocuments
+    recentDocumentIcons = icons
+    recentFilesTableView.reloadData()
+
+    if lastFileContainerView.isHidden && recentFilesTableView.numberOfRows > 0 {
+      recentFilesTableView.selectRowIndexes(IndexSet(integer: 0), byExtendingSelection: false)
     }
   }
 
   func reloadData() {
     guard loaded else { return }
-    loadLastPlaybackInfo()
-    recentDocuments = makeRecentDocumentsList()
-    recentFilesTableView.reloadData()
+    // The settings and the recent documents are read on the main thread. Whether the last played file exists, the paths the
+    // recent documents resolve to and their icons are found on the file queue, so that the main thread does not wait for the
+    // file system or LaunchServices, and are then shown on the main thread.
+    let lastFile = Preference.bool(for: .recordRecentFiles) && Preference.bool(for: .resumeLastPosition)
+      ? Preference.url(for: .iinaLastPlayedFilePath) : nil
+    let lastPosition = Preference.double(for: .iinaLastPlayedFilePosition)
+    let documents = NSDocumentController.shared.recentDocumentURLs
+    let verbose = Logger.isEmitting(.verbose)
+    Self.fileQueue.async { [weak self] in
+      let lastPlaybackURL = lastFile.flatMap { FileManager.default.fileExists(atPath: $0.path) ? $0 : nil }
+      // Need to call resolvingSymlinksInPath() on both sides, because it changes "/private/var" to "/var" as a special case,
+      // even though "/var" points to "/private/var" (i.e. it changes it the opposite direction from what is expected).
+      // This is probably a kludge on Apple's part to avoid breaking legacy FreeBSD code.
+      let resolvedLast = lastPlaybackURL?.resolvingSymlinksInPath()
+      let recentDocuments = documents.filter { $0.resolvingSymlinksInPath() != resolvedLast }
+      let icons = recentDocuments.map { NSWorkspace.shared.icon(forFile: $0.path) }
 
-    if Logger.isEmitting(.verbose) {
-      let last = lastPlaybackURL.flatMap { $0.resolvingSymlinksInPath().path } ?? "<none>"
-      Logger.log("InitialWindow.reloadData(): LastPlaybackURL: \(last)", level: .verbose)
+      if verbose {
+        Logger.log("InitialWindow.reloadData(): LastPlaybackURL: \(resolvedLast?.path ?? "<none>")", level: .verbose)
 
-      for (index, url) in NSDocumentController.shared.recentDocumentURLs.enumerated() {
-        Logger.log("InitialWindow.reloadData(): RecentDocuments_Unfiltered[\(index)]: \(url.resolvingSymlinksInPath().path)", level: .verbose)
+        for (index, url) in documents.enumerated() {
+          Logger.log("InitialWindow.reloadData(): RecentDocuments_Unfiltered[\(index)]: \(url.resolvingSymlinksInPath().path)", level: .verbose)
+        }
+
+        for (index, url) in recentDocuments.enumerated() {
+          Logger.log("InitialWindow.reloadData(): Loaded RecentDocuments[\(index)]: \(url.resolvingSymlinksInPath().path)", level: .verbose)
+        }
       }
 
-      for (index, url) in recentDocuments.enumerated() {
-        Logger.log("InitialWindow.reloadData(): Loaded RecentDocuments[\(index)]: \(url.resolvingSymlinksInPath().path)", level: .verbose)
+      DispatchQueue.main.async {
+        self?.show(lastPlaybackURL: lastPlaybackURL, lastPosition: lastPosition, recentDocuments: recentDocuments, icons: icons)
       }
-    }
-    
-    if lastFileContainerView.isHidden && recentFilesTableView.numberOfRows > 0 {
-      recentFilesTableView.selectRowIndexes(IndexSet(integer: 0), byExtendingSelection: false)
     }
   }
 }
@@ -387,7 +407,7 @@ extension InitialWindowController: NSTableViewDelegate, NSTableViewDataSource {
     }
 
     let url = recentDocuments[row]
-    cell.imageView?.image = NSWorkspace.shared.icon(forFile: url.path)
+    cell.imageView?.image = recentDocumentIcons[at: row]
     cell.textField?.stringValue = url.lastPathComponent
     return cell
   }

@@ -667,13 +667,23 @@ class Utility {
     }
   }
 
-  static func icon(for url: URL) -> NSImage {
-    if let uttype = UTType.types(tag: url.pathExtension, tagClass: .filenameExtension, conformingTo: nil).first {
-      return NSWorkspace.shared.icon(for: uttype)
-    } else {
-      return NSWorkspace.shared.icon(for: .data)
+  static func icon(for url: URL, completion: @escaping (NSImage) -> Void) {
+    // The type is found and its icon looked up on the icon queue, so that the main thread does not wait for LaunchServices.
+    // The icon is handed to `completion` on the main thread.
+    let pathExtension = url.pathExtension
+    iconQueue.async {
+      let icon: NSImage
+      if let uttype = UTType.types(tag: pathExtension, tagClass: .filenameExtension, conformingTo: nil).first {
+        icon = NSWorkspace.shared.icon(for: uttype)
+      } else {
+        icon = NSWorkspace.shared.icon(for: .data)
+      }
+      DispatchQueue.main.async { completion(icon) }
     }
   }
+
+  /// The serial queue `icon(for:completion:)` looks up file type icons on.
+  static let iconQueue = DispatchQueue(label: "IINAUtilityIcon", qos: .userInitiated)
 
   // MARK: - Util classes
 

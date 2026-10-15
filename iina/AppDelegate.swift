@@ -494,7 +494,6 @@ class AppDelegate: NSObject, NSApplicationDelegate, SPUUpdaterDelegate {
       let window = PlayerCore.first.initialWindow!
       window.showWindow(nil)
       if checkingForUpdatedData {
-        window.loadLastPlaybackInfo()
         window.reloadData()
       }
     case .openPanel:

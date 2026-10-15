@@ -328,8 +328,15 @@ class HistoryWindowController: NSWindowController, NSOutlineViewDelegate, NSOutl
           cell.textField?.isHidden = false
         }
         if isFile {
-          cell.docImage.image = Utility.icon(for: entry.url)
+          let url = entry.url
+          cell.iconURL = url
+          cell.docImage.image = nil
+          Utility.icon(for: url) { [weak cell] icon in
+            guard let cell, cell.iconURL == url else { return }
+            cell.docImage.image = icon
+          }
         } else {
+          cell.iconURL = nil
           cell.docImage.image = .sf("network")
         }
         return cell
@@ -711,6 +718,8 @@ extension HistoryWindowController: NSToolbarDelegate {
 
 class HistoryFilenameCellView: NSTableCellView {
   let docImage = NSImageView()
+  /// The file whose icon the cell shows, so that an icon found after the cell was given another entry is not shown.
+  var iconURL: URL?
 
   // When title is available, use title + filename
   // otherwise, use textField to show the filename
