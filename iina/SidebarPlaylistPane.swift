@@ -275,13 +275,18 @@ class SidebarPlaylistPane: NSView, SidebarPane {
 
   @objc func addURLAction(_ sender: AnyObject) {
     Utility.quickPromptPanel("add_url") { url in
-      if Regex.url.matches(url) {
-        self.player.appendToPlaylist(url)
-        self.updateTable()
-        self.player.sendOSD(.addToPlaylist(1))
-      } else {
-        Utility.showAlert("wrong_url_format")
-      }
+      self.addURL(url)
+    }
+  }
+
+  /// Add the URL given in the panel `addURLAction` shows to the playlist, without waiting for `mpv`.
+  func addURL(_ url: String) {
+    if Regex.url.matches(url) {
+      player.appendToPlaylist(url)
+      updateTable()
+      player.sendOSD(.addToPlaylist(1))
+    } else {
+      Utility.showAlert("wrong_url_format")
     }
   }
 

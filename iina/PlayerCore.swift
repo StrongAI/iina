@@ -2234,16 +2234,22 @@ class PlayerCore: NSObject {
       }
 
       DispatchQueue.main.async { [self] in
-        log("Running on_before_start_file hook: shuffling playlist")
-        mpv.command(.playlistShuffle)
-        info.isShuffled = true
-        /// will cancel this file load sequence (so `fileLoaded` will not be called), then will start loading item at index 0
-        mpv.command(.playlistPlayIndex, args: ["0"])
-        next()
+        shuffleForStartFile(then: next)
       }
     }
 
     mpv.addHook(MPVHook.onBeforeStartFile, hook: MPVHookValue(withBlock: callback))
+  }
+
+  /// Shuffle the playlist and play its first entry for the hook `addShufflePlaylistHook` adds, without waiting for `mpv`.
+  /// - Parameter next: Lets `mpv` go on from the hook. It is called on the queue `mpv` answers on once `mpv` has started playing the
+  ///     first entry, so `mpv` shuffles and starts the first entry before it goes on, and the main thread never waits for it.
+  func shuffleForStartFile(then next: @escaping () -> Void) {
+    log("Running on_before_start_file hook: shuffling playlist")
+    mpv.asyncCommand(.playlistShuffle, replyUserdata: 0)
+    info.isShuffled = true
+    /// will cancel this file load sequence (so `fileLoaded` will not be called), then will start loading item at index 0
+    mpv.asyncCommand(.playlistPlayIndex, args: ["0"]) { _ in next() }
   }
 
   // MARK: - Listeners
@@ -3614,31 +3620,39 @@ class PlayerCore: NSObject {
   }
 
   /** Check if there are IINA filters saved in watch_later file. */
-  func reloadSavedIINAfilters() {
-    // vf
-    let videoFilters = mpv.getFilters(MPVProperty.vf)
-    for filter in videoFilters {
-      guard let label = filter.label else { continue }
-      switch label {
-      case Constants.FilterName.crop:
-        info.cropFilter = filter
-        info.unsureCrop = ""
-      case Constants.FilterName.flip:
-        info.flipFilter = filter
-      case Constants.FilterName.mirror:
-        info.mirrorFilter = filter
-      case Constants.FilterName.delogo:
-        info.delogoFilter = filter
-      default:
-        break
-      }
-    }
-    // af
-    let audioFilters = mpv.getFilters(MPVProperty.af)
-    for filter in audioFilters {
-      guard let label = filter.label else { continue }
-      if label.hasPrefix(Constants.FilterName.audioEq) {
-        info.audioEqFilter = filter
+  /// The video and audio filters are read without waiting for `mpv`, IINA's own filters among them being stored on the main thread
+  /// once `mpv` has answered.
+  /// - Parameter completion: Called on the main thread once the filters are stored.
+  func reloadSavedIINAfilters(then completion: (() -> Void)? = nil) {
+    mpv.getFiltersAsync(MPVProperty.vf) { [self] videoFilters in
+      mpv.getFiltersAsync(MPVProperty.af) { [self] audioFilters in
+        DispatchQueue.main.async { [self] in
+          // vf
+          for filter in videoFilters {
+            guard let label = filter.label else { continue }
+            switch label {
+            case Constants.FilterName.crop:
+              info.cropFilter = filter
+              info.unsureCrop = ""
+            case Constants.FilterName.flip:
+              info.flipFilter = filter
+            case Constants.FilterName.mirror:
+              info.mirrorFilter = filter
+            case Constants.FilterName.delogo:
+              info.delogoFilter = filter
+            default:
+              break
+            }
+          }
+          // af
+          for filter in audioFilters {
+            guard let label = filter.label else { continue }
+            if label.hasPrefix(Constants.FilterName.audioEq) {
+              info.audioEqFilter = filter
+            }
+          }
+          completion?()
+        }
       }
     }
   }
