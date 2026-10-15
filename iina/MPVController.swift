@@ -1078,6 +1078,20 @@ class MPVController: NSObject {
     return result
   }
 
+  /// Read the list of video or audio filters without waiting for `mpv`, see `getNodesAsync`.
+  /// - Parameter name: The kind of filter identified by the mpv property name, `MPVProperty.af` or `MPVProperty.vf`.
+  /// - Parameter reply: Called with the filters, or none if they could not be read, on the thread of the queue for reading `mpv`
+  ///     events, or on the calling thread when no request could be made.
+  func getFiltersAsync(_ name: String, reply: @escaping ([MPVFilter]) -> Void) {
+    Logger.ensure(name == MPVProperty.vf || name == MPVProperty.af, "getFiltersAsync() does not support \(name)!")
+    getNodeAsync(name) { node in
+      let filters = node as? [[String: Any?]] ?? []
+      reply(filters.map { f in
+        MPVFilter(name: f["name"] as! String, label: f["label"] as? String, params: f["params"] as? [String: String])
+      })
+    }
+  }
+
   /// Remove the audio or video filter at the given index in the list of filters.
   ///
   /// Previously IINA removed filters using the mpv `af remove` and `vf remove` commands described in the
@@ -1103,76 +1117,93 @@ class MPVController: NSObject {
   /// IINA does for filters it creates or removing based on position in the filter list. This method supports removal based on the
   /// position within the list of filters.
   ///
-  /// The recommended implementation is to get the entire list of filters using `mpv_get_property`, remove the filter from the
-  /// `mpv_node` tree returned by that method and then set the list of filters using `mpv_set_property`. This is the approach
-  /// used by this method.
+  /// The recommended implementation is to get the entire list of filters, remove the filter from the `mpv_node` tree returned and
+  /// then set the list of filters. This method does so without waiting for `mpv`: it reads the list with `mpv_get_property_async`
+  /// and, once `mpv` answers, sets the reduced list with `mpv_set_property_async`. `mpv` handles requests in the order they are
+  /// made, so the list read includes every change requested before this request.
   /// - Parameter name: The kind of filter identified by the mpv property name, `MPVProperty.af` or `MPVProperty.vf`.
   /// - Parameter index: Index of the filter to be removed.
-  /// - Returns: `true` if the filter was successfully removed, `false` if the filter was not removed.
-  func removeFilter(_ name: String, _ index: Int) -> Bool {
+  /// - Parameter reply: Called with `true` if the filter was removed, `false` if it was not, on the thread of the queue for reading
+  ///     `mpv` events, or on the calling thread when no request could be made.
+  func removeFilter(_ name: String, _ index: Int, reply: @escaping (Bool) -> Void) {
     Logger.ensure(name == MPVProperty.vf || name == MPVProperty.af, "removeFilter() does not support \(name)!")
 
-    // Get the current list of filters from mpv as a mpv_node tree.
-    var oldNode = mpv_node()
-    defer { mpv_free_node_contents(&oldNode) }
-    mpv_get_property(mpv, name, MPV_FORMAT_NODE, &oldNode)
-
-    let oldList = oldNode.u.list!.pointee
-
-    // If the user uses mpv's JSON-based IPC protocol to make changes to mpv's filters behind IINA's
-    // back then there is a very small window of vulnerability where the list of filters displayed
-    // by IINA may be stale and therefore the index to remove may be invalid. IINA listens for
-    // changes to mpv's filter properties and updates the filters displayed when changes occur, so
-    // it is unlikely in practice that this method will be called with an invalid index, but we will
-    // validate the index nonetheless to insure this code does not trigger a crash.
-    guard index < oldList.num else {
-      log("Found \(oldList.num) \(name) filters, index of filter to remove (\(index)) is invalid",
-          level: .error)
-      return false
-    }
-
-    // The documentation for mpv_node states:
-    // "If mpv writes this struct (e.g. via mpv_get_property()), you must not change the data."
-    // So the approach taken is to create new top level node objects as those need to be modified in
-    // order to remove the filter, and reuse the lower level node objects representing the filters.
-    // First we create a new node list that is one entry smaller than the current list of filters.
-    let newNum = oldList.num - 1
-    let newValues = UnsafeMutablePointer<mpv_node>.allocate(capacity: Int(newNum))
-    defer {
-      newValues.deinitialize(count: Int(newNum))
-      newValues.deallocate()
-    }
-    var newList = mpv_node_list()
-    newList.num = newNum
-    newList.values = newValues
-
-    // Make the new list of values point to the same values in the old list, skipping the entry to
-    // be removed.
-    var newValuesPtr = newValues
-    var oldValuesPtr = oldList.values!
-    for i in 0 ..< oldList.num {
-      if i != index {
-        newValuesPtr.pointee = oldValuesPtr.pointee
-        newValuesPtr = newValuesPtr.successor()
+    let userdata = replyCallbacks.register { [self] error, data in
+      // The current list of filters from mpv as a mpv_node tree, valid only during this call.
+      guard error >= 0, let property = data?.assumingMemoryBound(to: mpv_event_property.self).pointee,
+            property.format == MPV_FORMAT_NODE, let value = property.data else {
+        log("Cannot read the \(name) filters to remove the filter at index \(index)", level: .error)
+        reply(false)
+        return
       }
-      oldValuesPtr = oldValuesPtr.successor()
-    }
+      let oldList = value.assumingMemoryBound(to: mpv_node.self).pointee.u.list!.pointee
 
-    // Add the new list to a new node.
-    let newListPtr = UnsafeMutablePointer<mpv_node_list>.allocate(capacity: 1)
-    defer {
-      newListPtr.deinitialize(count: 1)
-      newListPtr.deallocate()
-    }
-    newListPtr.pointee = newList
-    var newNode = mpv_node()
-    newNode.format = MPV_FORMAT_NODE_ARRAY
-    newNode.u.list = newListPtr
+      // If the user uses mpv's JSON-based IPC protocol to make changes to mpv's filters behind IINA's
+      // back then there is a very small window of vulnerability where the list of filters displayed
+      // by IINA may be stale and therefore the index to remove may be invalid. IINA listens for
+      // changes to mpv's filter properties and updates the filters displayed when changes occur, so
+      // it is unlikely in practice that this method will be called with an invalid index, but we will
+      // validate the index nonetheless to insure this code does not trigger a crash.
+      guard index < oldList.num else {
+        log("Found \(oldList.num) \(name) filters, index of filter to remove (\(index)) is invalid",
+            level: .error)
+        reply(false)
+        return
+      }
 
-    // Set the list of filters using the new node that leaves out the filter to be removed.
-    log("Set property: \(name)=<a mpv node>")
-    mpv_set_property(mpv, name, MPV_FORMAT_NODE, &newNode)
-    return true
+      // The documentation for mpv_node states:
+      // "If mpv writes this struct (e.g. via mpv_get_property()), you must not change the data."
+      // So the approach taken is to create new top level node objects as those need to be modified in
+      // order to remove the filter, and reuse the lower level node objects representing the filters.
+      // First we create a new node list that is one entry smaller than the current list of filters.
+      let newNum = oldList.num - 1
+      let newValues = UnsafeMutablePointer<mpv_node>.allocate(capacity: Int(newNum))
+      defer {
+        newValues.deinitialize(count: Int(newNum))
+        newValues.deallocate()
+      }
+      var newList = mpv_node_list()
+      newList.num = newNum
+      newList.values = newValues
+
+      // Make the new list of values point to the same values in the old list, skipping the entry to
+      // be removed.
+      var newValuesPtr = newValues
+      var oldValuesPtr = oldList.values!
+      for i in 0 ..< oldList.num {
+        if i != index {
+          newValuesPtr.pointee = oldValuesPtr.pointee
+          newValuesPtr = newValuesPtr.successor()
+        }
+        oldValuesPtr = oldValuesPtr.successor()
+      }
+
+      // Add the new list to a new node.
+      let newListPtr = UnsafeMutablePointer<mpv_node_list>.allocate(capacity: 1)
+      defer {
+        newListPtr.deinitialize(count: 1)
+        newListPtr.deallocate()
+      }
+      newListPtr.pointee = newList
+      var newNode = mpv_node()
+      newNode.format = MPV_FORMAT_NODE_ARRAY
+      newNode.u.list = newListPtr
+
+      // Set the list of filters using the new node that leaves out the filter to be removed. mpv copies the node before this
+      // returns, while the node read is still valid.
+      log("Asynchronously set property: \(name)=<a mpv node>")
+      let setUserdata = replyCallbacks.register { error, _ in reply(error >= 0) }
+      let returnValue = mpv_set_property_async(mpv, setUserdata, name, MPV_FORMAT_NODE, &newNode)
+      if returnValue < 0 {
+        replyCallbacks.take(setUserdata)?(returnValue, nil)
+      }
+    }
+    let returnValue = mpv == nil
+      ? MPV_ERROR_UNINITIALIZED.rawValue
+      : mpv_get_property_async(mpv, userdata, name, MPV_FORMAT_NODE)
+    if returnValue < 0 {
+      replyCallbacks.take(userdata)?(returnValue, nil)
+    }
   }
 
   /** Set filter. only "af" or "vf" is supported for name */
@@ -1421,7 +1452,7 @@ class MPVController: NSObject {
         scrollSeekAttribution.commandReplied(userdata: reply, error: event.pointee.error)
       }
 
-    case MPV_EVENT_GET_PROPERTY_REPLY:
+    case MPV_EVENT_GET_PROPERTY_REPLY, MPV_EVENT_SET_PROPERTY_REPLY:
       replyCallbacks.take(event.pointee.reply_userdata)?(event.pointee.error, event.pointee.data)
 
     case MPV_EVENT_QUEUE_OVERFLOW:

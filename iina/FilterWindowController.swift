@@ -127,21 +127,24 @@ class FilterWindowController: NSWindowController, NSWindowDelegate {
     NotificationCenter.default.removeObserver(self)
   }
 
-  func addFilter(_ filter: MPVFilter) -> Bool {
-    if filterType == MPVProperty.vf {
-      guard PlayerCore.lastActive.addVideoFilter(filter) else {
+  /// Add the filter without waiting for mpv.
+  /// - Parameter completion: Called on the main thread with `true` if the filter was added, `false` otherwise.
+  func addFilter(_ filter: MPVFilter, then completion: @escaping (Bool) -> Void) {
+    let added: (Bool) -> Void = { [self] added in
+      guard added else {
         Utility.showAlert("filter.incorrect", sheetWindow: window)
-        return false
+        completion(false)
+        return
       }
-    } else {
-      guard PlayerCore.lastActive.addAudioFilter(filter) else {
-        Utility.showAlert("filter.incorrect", sheetWindow: window)
-        return false
-      }
+      filters.append(filter)
+      reloadTable()
+      completion(true)
     }
-    filters.append(filter)
-    reloadTable()
-    return true
+    if filterType == MPVProperty.vf {
+      PlayerCore.lastActive.addVideoFilter(filter, then: added)
+    } else {
+      PlayerCore.lastActive.addAudioFilter(filter, then: added)
+    }
   }
 
   func saveFilter(_ filter: MPVFilter) {
@@ -183,19 +186,21 @@ class FilterWindowController: NSWindowController, NSWindowDelegate {
     let pc = PlayerCore.lastActive
     let selectedRow = currentFiltersTableView.selectedRow
     if selectedRow >= 0 {
-      let success: Bool
-      if filterType == MPVProperty.vf {
-        success = pc.removeVideoFilter(filters[selectedRow], selectedRow)
-      } else {
-        success = pc.removeAudioFilter(filters[selectedRow], selectedRow)
+      // The filter is removed without waiting for mpv, and the table updated once it is.
+      let removed: (Bool) -> Void = { [self] success in
+        if success {
+          reloadTable()
+          pc.sendOSD(.removeFilter)
+          // FIXME: For some reason, after removeFilterAction is called, tableViewSelectionDidChange(_:)
+          // for currentFiltersTableView is not called. This is a workaround to ensure
+          // tableViewSelectionDidChange(_:) is called.
+          currentFiltersTableView.deselectAll(self)
+        }
       }
-      if success {
-        reloadTable()
-        pc.sendOSD(.removeFilter)
-        // FIXME: For some reason, after removeFilterAction is called, tableViewSelectionDidChange(_:)
-        // for currentFiltersTableView is not called. This is a workaround to ensure
-        // tableViewSelectionDidChange(_:) is called.
-        currentFiltersTableView.deselectAll(self)
+      if filterType == MPVProperty.vf {
+        pc.removeVideoFilter(filters[selectedRow], selectedRow, then: removed)
+      } else {
+        pc.removeAudioFilter(filters[selectedRow], selectedRow, then: removed)
       }
     }
   }
@@ -212,10 +217,10 @@ class FilterWindowController: NSWindowController, NSWindowDelegate {
     let savedFilter = savedFilters[row]
     let pc = PlayerCore.lastActive
 
-    // choose appropriate add/remove functions for .af/.vf
-    var addFilterFunction: (String) -> Bool
-    var removeFilterFunction: (String, Int) -> Bool
-    var removeFilterUsingStringFunction: (String) -> Bool
+    // choose appropriate add/remove functions for .af/.vf, none of which waits for mpv
+    var addFilterFunction: (String, @escaping (Bool) -> Void) -> Void
+    var removeFilterFunction: (String, Int, @escaping (Bool) -> Void) -> Void
+    var removeFilterUsingStringFunction: (String, @escaping (Bool) -> Void) -> Void
     if filterType == MPVProperty.vf {
       addFilterFunction = pc.addVideoFilter
       removeFilterFunction = pc.removeVideoFilter
@@ -225,10 +230,17 @@ class FilterWindowController: NSWindowController, NSWindowDelegate {
       removeFilterFunction = pc.removeAudioFilter
       removeFilterUsingStringFunction = pc.removeAudioFilter
     }
+    let sendRemovedOSD: (Bool) -> Void = { removed in
+      if removed {
+        pc.sendOSD(.removeFilter)
+      }
+    }
 
     if sender.state == .on {  // user activated filter
-      if addFilterFunction(savedFilter.filterString) {
-        pc.sendOSD(.addFilter(savedFilter.name))
+      addFilterFunction(savedFilter.filterString) { added in
+        if added {
+          pc.sendOSD(.addFilter(savedFilter.name))
+        }
       }
     } else {  // user deactivated filter
       if let asObject = MPVFilter(rawString: savedFilter.filterString),
@@ -236,9 +248,7 @@ class FilterWindowController: NSWindowController, NSWindowDelegate {
         // Remove the filter based on the index within the list of configured filters. This is the
         // preferred way to remove a filter as using the string representation is unreliable due to
         // filters that take multiple parameters having multiple valid string representations.
-        if removeFilterFunction(savedFilter.filterString, index) {
-          pc.sendOSD(.removeFilter)
-        }
+        removeFilterFunction(savedFilter.filterString, index, sendRemovedOSD)
       } else {
         // If this occurs the MPVFilter method parseRawParamString may have not been able to parse
         // this kind of filter. Log the issue and attempt to remove the filter using the string
@@ -248,9 +258,7 @@ class FilterWindowController: NSWindowController, NSWindowDelegate {
           Failed to locate filter: \(savedFilter.filterString)\nIn the list of filters:
           \n\(filtersAsString())
           """, level: .warning)
-        if removeFilterUsingStringFunction(savedFilter.filterString) {
-          pc.sendOSD(.removeFilter)
-        }
+        removeFilterUsingStringFunction(savedFilter.filterString, sendRemovedOSD)
       }
     }
 
@@ -544,8 +552,10 @@ class NewFilterSheetViewController: NSViewController, NSTableViewDelegate, NSTab
       }
     }
     // create filter
-    if filterWindow.addFilter(preset.transformer(instance)) {
-      PlayerCore.lastActive.sendOSD(.addFilter(preset.localizedName))
+    filterWindow.addFilter(preset.transformer(instance)) { added in
+      if added {
+        PlayerCore.lastActive.sendOSD(.addFilter(preset.localizedName))
+      }
     }
   }
 

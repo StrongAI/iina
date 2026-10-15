@@ -98,7 +98,7 @@ extension MainWindowController {
   @objc func menuSetDelogo(_ sender: NSMenuItem) {
     if sender.state == .on {
       if let filter = player.info.delogoFilter {
-        let _ = player.removeVideoFilter(filter)
+        player.removeVideoFilter(filter)
         player.info.delogoFilter = nil
       }
     } else {

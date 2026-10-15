@@ -52,25 +52,34 @@ class MainMenuActionHandler: NSResponder, NSMenuItemValidation {
   }
 
   @objc func menuDeleteCurrentFile(_ sender: NSMenuItem) {
-    guard let url = player.info.currentURL, !player.info.isNetworkResource else { return }
-    do {
-      let index = player.mpv.getInt(MPVProperty.playlistPos)
-      player.playlistRemove(index)
-      try FileManager.default.trashItem(at: url, resultingItemURL: nil)
-    } catch let error {
-      Utility.showAlert("playlist.error_deleting", arguments: [error.localizedDescription])
-    }
+    deleteCurrentFile { try Utility.trashItem($0) }
   }
 
   // currently only being used for key command
   @objc func menuDeleteCurrentFileHard(_ sender: NSMenuItem) {
+    deleteCurrentFile { try FileManager.default.removeItem(at: $0) }
+  }
+
+  /// Remove the current file from the playlist and delete it with `delete` without the main thread waiting: the playlist position is
+  /// read without waiting for mpv, the entry is removed on the main thread, then the file is deleted on the player's open queue.
+  private func deleteCurrentFile(with delete: @escaping (URL) throws -> Void) {
     guard let url = player.info.currentURL, !player.info.isNetworkResource else { return }
-    do {
-      let index = player.mpv.getInt(MPVProperty.playlistPos)
-      player.playlistRemove(index)
-      try FileManager.default.removeItem(at: url)
-    } catch let error {
-      Utility.showAlert("playlist.error_deleting", arguments: [error.localizedDescription])
+    let player = player
+    player.mpv.getNodeAsync(MPVProperty.playlistPos) { position in
+      DispatchQueue.main.async {
+        if let index = position as? Int64 {
+          player.playlistRemove(Int(index))
+        }
+        player.openQueue.async {
+          do {
+            try delete(url)
+          } catch let error {
+            DispatchQueue.main.async {
+              Utility.showAlert("playlist.error_deleting", arguments: [error.localizedDescription])
+            }
+          }
+        }
+      }
     }
   }
 
@@ -263,25 +272,32 @@ extension MainMenuActionHandler {
   private func menuToggleFilterString(_ string: String, forType type: String) {
     let isVideo = type == MPVProperty.vf
     if let filter = MPVFilter(rawString: string) {
+      let player = player
       // Removing a filter based on its position within the filter list is the preferred way to do
       // it as per discussion with the mpv project. Search the list of filters and find the index
-      // of the specified filter (if present).
-      if let index = player.mpv.getFilters(type).firstIndex(of: filter) {
-        // remove
-        if isVideo {
-          _ = player.removeVideoFilter(filter, index)
-        } else {
-          _ = player.removeAudioFilter(filter, index)
-        }
-      } else {
-        // add
-        if isVideo {
-          if !player.addVideoFilter(filter) {
-            Utility.showAlert("filter.incorrect")
-          }
-        } else {
-          if !player.addAudioFilter(filter) {
-            Utility.showAlert("filter.incorrect")
+      // of the specified filter (if present). The list is read without waiting for mpv, and the
+      // filter is then added or removed on the main thread.
+      player.mpv.getFiltersAsync(type) { filters in
+        DispatchQueue.main.async {
+          if let index = filters.firstIndex(of: filter) {
+            // remove
+            if isVideo {
+              player.removeVideoFilter(filter, index)
+            } else {
+              player.removeAudioFilter(filter, index)
+            }
+          } else {
+            // add
+            let showAlertIfNotAdded: (Bool) -> Void = { added in
+              if !added {
+                Utility.showAlert("filter.incorrect")
+              }
+            }
+            if isVideo {
+              player.addVideoFilter(filter, then: showAlertIfNotAdded)
+            } else {
+              player.addAudioFilter(filter, then: showAlertIfNotAdded)
+            }
           }
         }
       }

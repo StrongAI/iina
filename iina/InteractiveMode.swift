@@ -57,7 +57,7 @@ class InteractiveModeController: NSObject {
     )
   }()
 
-  private lazy var cropBoxView: CropBoxView = CropBoxView(callback: {
+  lazy var cropBoxView: CropBoxView = CropBoxView(callback: {
     [unowned self] in selectedRectUpdated()
   })
 
@@ -170,7 +170,7 @@ class InteractiveModeController: NSObject {
     cropBoxView.setSelectedRect(to: cropped)
   }
 
-  @objc private func doneAction(_ sender: AnyObject) {
+  @objc func doneAction(_ sender: AnyObject) {
     switch currentMode {
     case .crop:
       cropAction()
@@ -210,13 +210,16 @@ class InteractiveModeController: NSObject {
         "h": String(self.croph)
       ])
       if let existingFilter = player.info.delogoFilter {
-        let _ = player.removeVideoFilter(existingFilter)
+        player.removeVideoFilter(existingFilter)
       }
-      if !player.addVideoFilter(filter) {
-        Utility.showAlert("filter.incorrect")
-        return
+      // Added after the removal, which mpv handles first.
+      player.addVideoFilter(filter) { added in
+        guard added else {
+          Utility.showAlert("filter.incorrect")
+          return
+        }
+        player.info.delogoFilter = filter
       }
-      player.info.delogoFilter = filter
     }
   }
 

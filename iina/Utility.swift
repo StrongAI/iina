@@ -546,6 +546,10 @@ class Utility {
   /// opening a browser, a Finder window or another app, or changing the default apps.
   static var makeWorkspaceRequest: (WorkspaceRequest) -> Bool = { $0.make() }
 
+  /// Moves a file to the Trash. It exists so that tests can move the files they delete into a folder of their own in its place,
+  /// leaving the Trash of the account running them untouched.
+  static var trashItem: (URL) throws -> Void = { try FileManager.default.trashItem(at: $0, resultingItemURL: nil) }
+
   /// Run `work`, which makes its LaunchServices requests through `makeWorkspaceRequest`, on `workspaceQueue`.
   static func onWorkspaceQueue(_ work: @escaping () -> Void) {
     workspaceQueue.async(execute: work)

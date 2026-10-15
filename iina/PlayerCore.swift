@@ -1474,13 +1474,15 @@ class PlayerCore: NSObject {
       if info.flipFilter == nil {
         let vf = MPVFilter.flip()
         vf.label = Constants.FilterName.flip
-        if addVideoFilter(vf) {
-          info.flipFilter = vf
+        addVideoFilter(vf) { [self] added in
+          if added {
+            info.flipFilter = vf
+          }
         }
       }
     } else {
       if let vf = info.flipFilter {
-        let _ = removeVideoFilter(vf)
+        removeVideoFilter(vf)
         info.flipFilter = nil
       }
     }
@@ -1491,13 +1493,15 @@ class PlayerCore: NSObject {
       if info.mirrorFilter == nil {
         let vf = MPVFilter.mirror()
         vf.label = Constants.FilterName.mirror
-        if addVideoFilter(vf) {
-          info.mirrorFilter = vf
+        addVideoFilter(vf) { [self] added in
+          if added {
+            info.mirrorFilter = vf
+          }
         }
       }
     } else {
       if let vf = info.mirrorFilter {
-        let _ = removeVideoFilter(vf)
+        removeVideoFilter(vf)
         info.mirrorFilter = nil
       }
     }
@@ -1825,7 +1829,7 @@ class PlayerCore: NSObject {
       info.cropFilter = vf
     } else {
       if let filter = info.cropFilter {
-        let _ = removeVideoFilter(filter)
+        removeVideoFilter(filter)
         info.unsureCrop = "None"
       }
     }
@@ -1833,15 +1837,17 @@ class PlayerCore: NSObject {
 
   func setCrop(fromFilter filter: MPVFilter) {
     filter.label = Constants.FilterName.crop
-    if addVideoFilter(filter) {
-      info.cropFilter = filter
+    addVideoFilter(filter) { [self] added in
+      if added {
+        info.cropFilter = filter
+      }
     }
   }
 
   /// Remove the crop filter managed by IINA.
   func removeCropFilter() {
     if let vf = info.cropFilter {
-      let _ = removeVideoFilter(vf)
+      removeVideoFilter(vf)
       info.unsureCrop = "None"
     }
   }
@@ -1854,48 +1860,6 @@ class PlayerCore: NSObject {
     let filter = MPVFilter(name: "lavfi", label: Constants.FilterName.audioEq, paramString: "[\(paramString)]")
     addAudioFilter(filter)
     info.audioEqFilter = filter
-  }
-
-  /// Add a video filter given as a `MPVFilter` object.
-  ///
-  /// This method will prompt the user to change IINA's video preferences if hardware decoding is set to `auto`.
-  /// - Parameter filter: The filter to add.
-  /// - Returns: `true` if the filter was successfully added, `false` otherwise.
-  func addVideoFilter(_ filter: MPVFilter) -> Bool { addVideoFilter(filter.stringFormat) }
-
-  /// Add a video filter given as a string.
-  ///
-  /// This method will prompt the user to change IINA's video preferences if hardware decoding is set to `auto`.
-  /// - Parameter filter: The filter to add.
-  /// - Returns: `true` if the filter was successfully added, `false` otherwise.
-  func addVideoFilter(_ filter: String) -> Bool {
-    log("Adding video filter \(filter)...")
-    // check hwdec
-    let askHwdec: (() -> Bool) = {
-      self.askHwdecForFilter { self.mpv.setString(MPVProperty.hwdec, $0) }
-    }
-    let hwdec = mpv.getString(MPVProperty.hwdec)
-    if hwdec == "auto" {
-      // if not on main thread, post the alert in main thread
-      if Thread.isMainThread {
-        if !askHwdec() { return false }
-      } else {
-        var result = false
-        DispatchQueue.main.sync {
-          result = askHwdec()
-        }
-        if !result { return false }
-      }
-    }
-    // try apply filter
-    var result = true
-    mpv.command(.vf, args: ["add", filter], checkError: false) { result = $0 >= 0 }
-    if !result {
-      log("Failed to add video filter \(filter)", level: .warning)
-    } else {
-      log("Successfully added video filter \(filter)")
-    }
-    return result
   }
 
   /// Add a video filter given as a `MPVFilter` object without waiting for `mpv`, see `addVideoFilter(_:then:)`.
@@ -1966,30 +1930,31 @@ class PlayerCore: NSObject {
     }
   }
 
-  /// Remove a video filter based on its position in the list of filters.
+  /// Remove a video filter based on its position in the list of filters without waiting for `mpv`.
   ///
   /// Removing a filter based on its position within the filter list is the preferred way to do it as per discussion with the mpv project.
   /// - Parameter filter: The filter to be removed, required only for logging.
   /// - Parameter index: The index of the filter to be removed.
-  /// - Returns: `true` if the filter was successfully removed, `false` otherwise.
-  func removeVideoFilter(_ filter: MPVFilter, _ index: Int) -> Bool {
-    removeVideoFilter(filter.stringFormat, index)
+  /// - Parameter completion: Called on the main thread with `true` if the filter was removed, `false` otherwise.
+  func removeVideoFilter(_ filter: MPVFilter, _ index: Int, then completion: @escaping (Bool) -> Void = { _ in }) {
+    removeVideoFilter(filter.stringFormat, index, then: completion)
   }
 
-  /// Remove a video filter based on its position in the list of filters.
+  /// Remove a video filter based on its position in the list of filters without waiting for `mpv`.
   ///
   /// Removing a filter based on its position within the filter list is the preferred way to do it as per discussion with the mpv project.
   /// - Parameter filter: The filter to be removed, required only for logging.
   /// - Parameter index: The index of the filter to be removed.
-  /// - Returns: `true` if the filter was successfully removed, `false` otherwise.
-  func removeVideoFilter(_ filter: String, _ index: Int) -> Bool {
+  /// - Parameter completion: Called on the main thread with `true` if the filter was removed, `false` otherwise.
+  func removeVideoFilter(_ filter: String, _ index: Int, then completion: @escaping (Bool) -> Void = { _ in }) {
     log("Removing video filter \(filter)...")
-    let result = mpv.removeFilter(MPVProperty.vf, index)
-    logRemoveFilter(type: "video", result: result, name: filter)
-    return result
+    mpv.removeFilter(MPVProperty.vf, index) { [self] removed in
+      logRemoveFilter(type: "video", result: removed, name: filter)
+      DispatchQueue.main.async { completion(removed) }
+    }
   }
 
-  /// Remove a video filter given as a `MPVFilter` object.
+  /// Remove a video filter given as a `MPVFilter` object without waiting for `mpv`.
   ///
   /// If the filter is not labeled then removing using a `MPVFilter` object can be problematic if the filter has multiple parameters.
   /// Filters that support multiple parameters have more than one valid string representation due to there being no requirement on the
@@ -1998,15 +1963,16 @@ class PlayerCore: NSObject {
   /// this reason the remove methods that identify the filter to be removed based on its position in the filter list are the preferred way to
   /// remove a filter.
   /// - Parameter filter: The filter to remove.
-  /// - Returns: `true` if the filter was successfully removed, `false` otherwise.
-  func removeVideoFilter(_ filter: MPVFilter) -> Bool {
+  /// - Parameter completion: Called on the main thread with `true` if the filter was removed, `false` otherwise.
+  func removeVideoFilter(_ filter: MPVFilter, then completion: @escaping (Bool) -> Void = { _ in }) {
     if let label = filter.label {
-      return removeVideoFilter("@" + label)
+      removeVideoFilter("@" + label, then: completion)
+      return
     }
-    return removeVideoFilter(filter.stringFormat)
+    removeVideoFilter(filter.stringFormat, then: completion)
   }
 
-  /// Remove a video filter given as a string.
+  /// Remove a video filter given as a string without waiting for `mpv`.
   ///
   /// If the filter is not labeled then removing using a string can be problematic if the filter has multiple parameters. Filters that support
   /// multiple parameters have more than one valid string representation due to there being no requirement on the order in which those
@@ -2014,61 +1980,64 @@ class PlayerCore: NSObject {
   /// mpv does not match the order mpv expects the remove command will not find the filter to be removed. For this reason the remove
   /// methods that identify the filter to be removed based on its position in the filter list are the preferred way to remove a filter.
   /// - Parameter filter: The filter to remove.
-  /// - Returns: `true` if the filter was successfully removed, `false` otherwise.
-  func removeVideoFilter(_ filter: String) -> Bool {
+  /// - Parameter completion: Called on the main thread with `true` if the filter was removed, `false` otherwise.
+  func removeVideoFilter(_ filter: String, then completion: @escaping (Bool) -> Void = { _ in }) {
     log("Removing video filter \(filter)...")
-    var result = true
-    mpv.command(.vf, args: ["remove", filter], checkError: false) { result = $0 >= 0 }
-    logRemoveFilter(type: "video", result: result, name: filter)
-    return result
-  }
-
-  /// Add an audio filter given as a `MPVFilter` object.
-  /// - Parameter filter: The filter to add.
-  /// - Returns: `true` if the filter was successfully added, `false` otherwise.
-  @discardableResult
-  func addAudioFilter(_ filter: MPVFilter) -> Bool { addAudioFilter(filter.stringFormat) }
-
-  /// Add an audio filter given as a string.
-  /// - Parameter filter: The filter to add.
-  /// - Returns: `true` if the filter was successfully added, `false` otherwise.
-  @discardableResult
-  func addAudioFilter(_ filter: String) -> Bool {
-    log("Adding audio filter \(filter)...")
-    var result = true
-    mpv.command(.af, args: ["add", filter], checkError: false) { result = $0 >= 0 }
-    if !result {
-      log("Failed to add audio filter \(filter)", level: .warning)
-    } else {
-      log("Successfully added audio filter \(filter)")
+    mpv.asyncCommand(.vf, args: ["remove", filter]) { [self] code in
+      let removed = code >= 0
+      logRemoveFilter(type: "video", result: removed, name: filter)
+      DispatchQueue.main.async { completion(removed) }
     }
-    return result
   }
 
-  /// Remove an audio filter based on its position in the list of filters.
+  /// Add an audio filter given as a `MPVFilter` object without waiting for `mpv`.
+  /// - Parameter filter: The filter to add.
+  /// - Parameter completion: Called on the main thread with `true` if the filter was added, `false` otherwise.
+  func addAudioFilter(_ filter: MPVFilter, then completion: @escaping (Bool) -> Void = { _ in }) {
+    addAudioFilter(filter.stringFormat, then: completion)
+  }
+
+  /// Add an audio filter given as a string without waiting for `mpv`.
+  /// - Parameter filter: The filter to add.
+  /// - Parameter completion: Called on the main thread with `true` if the filter was added, `false` otherwise.
+  func addAudioFilter(_ filter: String, then completion: @escaping (Bool) -> Void = { _ in }) {
+    log("Adding audio filter \(filter)...")
+    mpv.asyncCommand(.af, args: ["add", filter]) { [self] code in
+      let added = code >= 0
+      if !added {
+        log("Failed to add audio filter \(filter)", level: .warning)
+      } else {
+        log("Successfully added audio filter \(filter)")
+      }
+      DispatchQueue.main.async { completion(added) }
+    }
+  }
+
+  /// Remove an audio filter based on its position in the list of filters without waiting for `mpv`.
   ///
   /// Removing a filter based on its position within the filter list is the preferred way to do it as per discussion with the mpv project.
   /// - Parameter filter: The filter to be removed, required only for logging.
   /// - Parameter index: The index of the filter to be removed.
-  /// - Returns: `true` if the filter was successfully removed, `false` otherwise.
-  func removeAudioFilter(_ filter: MPVFilter, _ index: Int) -> Bool {
-    removeAudioFilter(filter.stringFormat, index)
+  /// - Parameter completion: Called on the main thread with `true` if the filter was removed, `false` otherwise.
+  func removeAudioFilter(_ filter: MPVFilter, _ index: Int, then completion: @escaping (Bool) -> Void = { _ in }) {
+    removeAudioFilter(filter.stringFormat, index, then: completion)
   }
 
-  /// Remove an audio filter based on its position in the list of filters.
+  /// Remove an audio filter based on its position in the list of filters without waiting for `mpv`.
   ///
   /// Removing a filter based on its position within the filter list is the preferred way to do it as per discussion with the mpv project.
   /// - Parameter filter: The filter to be removed, required only for logging.
   /// - Parameter index: The index of the filter to be removed.
-  /// - Returns: `true` if the filter was successfully removed, `false` otherwise.
-  func removeAudioFilter(_ filter: String, _ index: Int) -> Bool {
+  /// - Parameter completion: Called on the main thread with `true` if the filter was removed, `false` otherwise.
+  func removeAudioFilter(_ filter: String, _ index: Int, then completion: @escaping (Bool) -> Void = { _ in }) {
     log("Removing audio filter \(filter)...")
-    let result = mpv.removeFilter(MPVProperty.af, index)
-    logRemoveFilter(type: "audio", result: result, name: filter)
-    return result
+    mpv.removeFilter(MPVProperty.af, index) { [self] removed in
+      logRemoveFilter(type: "audio", result: removed, name: filter)
+      DispatchQueue.main.async { completion(removed) }
+    }
   }
 
-  /// Remove an audio filter given as a `MPVFilter` object.
+  /// Remove an audio filter given as a `MPVFilter` object without waiting for `mpv`.
   ///
   /// If the filter is not labeled then removing using a `MPVFilter` object can be problematic if the filter has multiple parameters.
   /// Filters that support multiple parameters have more than one valid string representation due to there being no requirement on the
@@ -2077,11 +2046,12 @@ class PlayerCore: NSObject {
   /// this reason the remove methods that identify the filter to be removed based on its position in the filter list are the preferred way to
   /// remove a filter.
   /// - Parameter filter: The filter to remove.
-  /// - Returns: `true` if the filter was successfully removed, `false` otherwise.
-  @discardableResult
-  func removeAudioFilter(_ filter: MPVFilter) -> Bool { removeAudioFilter(filter.stringFormat) }
+  /// - Parameter completion: Called on the main thread with `true` if the filter was removed, `false` otherwise.
+  func removeAudioFilter(_ filter: MPVFilter, then completion: @escaping (Bool) -> Void = { _ in }) {
+    removeAudioFilter(filter.stringFormat, then: completion)
+  }
 
-  /// Remove an audio filter given as a string.
+  /// Remove an audio filter given as a string without waiting for `mpv`.
   ///
   /// If the filter is not labeled then removing using a string can be problematic if the filter has multiple parameters. Filters that support
   /// multiple parameters have more than one valid string representation due to there being no requirement on the order in which those
@@ -2089,14 +2059,14 @@ class PlayerCore: NSObject {
   /// mpv does not match the order mpv expects the remove command will not find the filter to be removed. For this reason the remove
   /// methods that identify the filter to be removed based on its position in the filter list are the preferred way to remove a filter.
   /// - Parameter filter: The filter to remove.
-  /// - Returns: `true` if the filter was successfully removed, `false` otherwise.
-  @discardableResult
-  func removeAudioFilter(_ filter: String) -> Bool {
+  /// - Parameter completion: Called on the main thread with `true` if the filter was removed, `false` otherwise.
+  func removeAudioFilter(_ filter: String, then completion: @escaping (Bool) -> Void = { _ in }) {
     log("Removing audio filter \(filter)...")
-    var result = true
-    mpv.command(.af, args: ["remove", filter], checkError: false)  { result = $0 >= 0 }
-    logRemoveFilter(type: "audio", result: result, name: filter)
-    return result
+    mpv.asyncCommand(.af, args: ["remove", filter]) { [self] code in
+      let removed = code >= 0
+      logRemoveFilter(type: "audio", result: removed, name: filter)
+      DispatchQueue.main.async { completion(removed) }
+    }
   }
 
   /// Return the list of audio devices.
