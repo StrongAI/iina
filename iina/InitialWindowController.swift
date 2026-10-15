@@ -36,6 +36,8 @@ class InitialWindowController: NSWindowController {
   var recentFilesTableView: NSTableView!
   var overlayView: NSView!
   var lastFileContainerView: InitialWindowViewActionButton!
+  /// The app's icon in the header, looked up on `fileQueue`.
+  var appIcon: NSImageView!
   var lastFileIcon: NSImageView!
   var lastFileNameLabel: NSTextField!
   var lastPositionLabel: NSTextField!
@@ -134,7 +136,9 @@ class InitialWindowController: NSWindowController {
 
     // header
 
-    let appIcon = ui.image(nil, size: 68)
+    // Empty until the app's icon is found on the file queue.
+    let appIcon = ui.image(NSImage(), size: 68)
+    self.appIcon = appIcon
     appIcon.translatesAutoresizingMaskIntoConstraints = false
 
     let iinaLabel = NSTextField(labelWithString: "IINA")
