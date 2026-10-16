@@ -251,7 +251,8 @@ class AppDelegate: NSObject, NSApplicationDelegate, SPUUpdaterDelegate {
     // register for url event
     NSAppleEventManager.shared().setEventHandler(self, andSelector: #selector(self.handleURLEvent(event:withReplyEvent:)), forEventClass: AEEventClass(kInternetEventClass), andEventID: AEEventID(kAEGetURL))
 
-    // Check for legacy pref entries and migrate them to their modern equivalents.
+    // Check for legacy pref entries and migrate them to their modern equivalents. The prefs are read off the main thread and the
+    // modern ones set on it, so that a player whose mpv started before they are set is given them through the prefs it observes.
     LegacyMigration.shared.migrateLegacyPreferences()
     LegacyMigration.shared.migrateToneMappingTargetPeak()
 

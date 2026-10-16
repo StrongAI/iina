@@ -22,6 +22,9 @@ class LegacyMigration {
   /// The `LegacyMigration` singleton object.
   static var shared = LegacyMigration()
 
+  /// The queue the settings domain is copied and legacy values decoded on, so that the main thread does not wait for either.
+  static let queue = DispatchQueue(label: "IINALegacyMigration", qos: .userInitiated)
+
   /**
    Loops over the set of legacy preference keys. If a value is found for a given legacy key, but no value is found for its modern equivalent key,
    the legacy value is migrated & stored under the modern key.
@@ -40,40 +43,55 @@ class LegacyMigration {
    However, it is worth noting that this migration will only happen once, and afterwards newer versions of IINA will not look at the old pref entry.
    And since older versions of IINA will only use the old pref entry, users who mix old and new versions of IINA may experience different values
    for these keys.
+
+   The settings domain is copied and the legacy colors decoded on `queue`, so that the main thread does not wait for either, while
+   the modern prefs are set on the main thread, where a player's mpv and the settings bound to them observe them. `completion` is
+   called on the main thread once the prefs found are migrated.
    */
-  func migrateLegacyPreferences() {
+  func migrateLegacyPreferences(then completion: @escaping () -> Void = {}) {
     Logger.log("Looking for legacy color prefs to migrate")
 
-    let appID = InfoDictionary.shared.bundleIdentifier
-    guard let persistedPrefKeys = UserDefaults.standard.persistentDomain(forName: appID)?.keys else {
-      Logger.log("Aborting legacy color prefs migration: failed to find prefs domain for \"\(appID)\"!", level: .error)
-      return
-    }
-
-    var unmigratedEntriesFoundCount: Int = 0
-    var entriesMigratedCount: Int = 0
-    for (modernKey, legacyKey) in LegacyMigration.legacyColorPrefKeyMap {
-      // Migrate pref only if there is a legacy entry with but no corresponding modern entry
-      guard persistedPrefKeys.contains(legacyKey.rawValue),
-            !persistedPrefKeys.contains(modernKey.rawValue) else { continue }
-      unmigratedEntriesFoundCount += 1
-
-      // Deserialize & convert legacy pref value to modern string format:
-      guard let legacyData = Preference.data(for: legacyKey) else { continue }
-      guard let color = ObjcUtils.unarchiveLegacyObject(with: legacyData) as? NSColor,
-            let mpvColorString = color.usingColorSpace(.deviceRGB)?.mpvColorString else {
-        Logger.log("Failed to convert color value from legacy pref \(legacyKey.rawValue)", level: .error)
-        continue
+    LegacyMigration.queue.async {
+      let appID = InfoDictionary.shared.bundleIdentifier
+      guard let persistedPrefKeys = UserDefaults.standard.persistentDomain(forName: appID)?.keys else {
+        Logger.log("Aborting legacy color prefs migration: failed to find prefs domain for \"\(appID)\"!", level: .error)
+        DispatchQueue.main.async(execute: completion)
+        return
       }
-      // Store string under modern pref key:
-      Preference.set(mpvColorString, for: modernKey)
-      Logger.log("Converted color value from legacy pref \(legacyKey.rawValue) and stored in pref \(modernKey.rawValue)")
-      entriesMigratedCount += 1
-    }
-    if unmigratedEntriesFoundCount == 0 {
-      Logger.log("No unmigrated legacy color prefs found")
-    } else {
-      Logger.log("Migrated \(entriesMigratedCount) of \(unmigratedEntriesFoundCount) legacy color prefs")
+
+      var unmigratedEntriesFoundCount: Int = 0
+      var convertedEntries: [(modernKey: Preference.Key, legacyKey: Preference.Key, mpvColorString: String)] = []
+      for (modernKey, legacyKey) in LegacyMigration.legacyColorPrefKeyMap {
+        // Migrate pref only if there is a legacy entry with but no corresponding modern entry
+        guard persistedPrefKeys.contains(legacyKey.rawValue),
+              !persistedPrefKeys.contains(modernKey.rawValue) else { continue }
+        unmigratedEntriesFoundCount += 1
+
+        // Deserialize & convert legacy pref value to modern string format:
+        guard let legacyData = Preference.data(for: legacyKey) else { continue }
+        guard let color = ObjcUtils.unarchiveLegacyObject(with: legacyData) as? NSColor,
+              let mpvColorString = color.usingColorSpace(.deviceRGB)?.mpvColorString else {
+          Logger.log("Failed to convert color value from legacy pref \(legacyKey.rawValue)", level: .error)
+          continue
+        }
+        convertedEntries.append((modernKey, legacyKey, mpvColorString))
+      }
+
+      let foundCount = unmigratedEntriesFoundCount
+      let converted = convertedEntries
+      DispatchQueue.main.async {
+        for (modernKey, legacyKey, mpvColorString) in converted {
+          // Store string under modern pref key:
+          Preference.set(mpvColorString, for: modernKey)
+          Logger.log("Converted color value from legacy pref \(legacyKey.rawValue) and stored in pref \(modernKey.rawValue)")
+        }
+        if foundCount == 0 {
+          Logger.log("No unmigrated legacy color prefs found")
+        } else {
+          Logger.log("Migrated \(converted.count) of \(foundCount) legacy color prefs")
+        }
+        completion()
+      }
     }
   }
 
@@ -94,29 +112,41 @@ class LegacyMigration {
   ///
   /// If this function finds `enableToneMappingTargetPeakOverride` has not been set it will set the value of the new settings
   /// appropriately based on the value of the legacy `toneMappingTargetPeak` setting.
-  func migrateToneMappingTargetPeak() {
-    let appID = InfoDictionary.shared.bundleIdentifier
-    guard let persistedPrefKeys = UserDefaults.standard.persistentDomain(forName: appID)?.keys else {
-      // Internal error, should not occur.
-      Logger.log("""
-        Aborting legacy tone mapping target peak setting migration: failed to find settings domain \
-        for \"\(appID)\"!
-        """, level: .error)
-      return
+  ///
+  /// The settings domain is copied on `queue`, so that the main thread does not wait for it, while the new settings are set on the
+  /// main thread, where the player windows observe them. `completion` is called on the main thread once the setting is migrated or
+  /// found not to need it.
+  func migrateToneMappingTargetPeak(then completion: @escaping () -> Void = {}) {
+    LegacyMigration.queue.async {
+      let appID = InfoDictionary.shared.bundleIdentifier
+      guard let persistedPrefKeys = UserDefaults.standard.persistentDomain(forName: appID)?.keys else {
+        // Internal error, should not occur.
+        Logger.log("""
+          Aborting legacy tone mapping target peak setting migration: failed to find settings domain \
+          for \"\(appID)\"!
+          """, level: .error)
+        DispatchQueue.main.async(execute: completion)
+        return
+      }
+      guard !persistedPrefKeys.contains(Preference.Key.enableToneMappingTargetPeakOverride.rawValue) else {
+        DispatchQueue.main.async(execute: completion)
+        return
+      }
+      DispatchQueue.main.async {
+        Logger.log("Migrating tone mapping target peak setting")
+        let targetPeak = Preference.integer(for: .toneMappingTargetPeak)
+        if targetPeak == 0 {
+          Preference.set(false, for: .enableToneMappingTargetPeakOverride)
+          Logger.log("Set enableToneMappingTargetPeakOverride to false")
+        } else {
+          Preference.set(true, for: .enableToneMappingTargetPeakOverride)
+          Logger.log("Set enableToneMappingTargetPeakOverride to true")
+          Preference.set(targetPeak, for: .toneMappingTargetPeakOverride)
+          Logger.log("Set toneMappingTargetPeakOverride to \(targetPeak)")
+        }
+        Logger.log("Migrated tone mapping target peak setting")
+        completion()
+      }
     }
-    guard !persistedPrefKeys.contains(Preference.Key.enableToneMappingTargetPeakOverride.rawValue)
-    else { return }
-    Logger.log("Migrating tone mapping target peak setting")
-    let targetPeak = Preference.integer(for: .toneMappingTargetPeak)
-    if targetPeak == 0 {
-      Preference.set(false, for: .enableToneMappingTargetPeakOverride)
-      Logger.log("Set enableToneMappingTargetPeakOverride to false")
-    } else {
-      Preference.set(true, for: .enableToneMappingTargetPeakOverride)
-      Logger.log("Set enableToneMappingTargetPeakOverride to true")
-      Preference.set(targetPeak, for: .toneMappingTargetPeakOverride)
-      Logger.log("Set toneMappingTargetPeakOverride to \(targetPeak)")
-    }
-    Logger.log("Migrated tone mapping target peak setting")
   }
 }
