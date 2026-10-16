@@ -3314,6 +3314,8 @@ class PlayerCore: NSObject {
   }
 
   func hideOSD() {
+    // A main window that was never loaded shows no OSD and has no view to hide it with.
+    guard mainWindow.loaded else { return }
     DispatchQueue.main.async {
       self.mainWindow.hideOSD()
     }
