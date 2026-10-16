@@ -113,6 +113,8 @@ class PrefKeyBindingViewController: PreferenceViewController, PreferenceWindowEm
 
     // Load the config file saved in user default
     loadConfigFile(Preference.string(for: .currentInputConfigName), true)
+    // The commands are shown translated with the key binding translator's tables, which are read off the main thread.
+    KeyBindingTranslator.load { [weak self] in self?.kbTableView.reloadData() }
 
     NotificationCenter.default.addObserver(forName: .iinaKeyBindingChanged, object: nil, queue: .main, using: saveToConfFile)
   }

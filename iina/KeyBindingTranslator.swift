@@ -11,21 +11,53 @@ import Mustache
 
 class KeyBindingTranslator {
 
-  static let l10nDic: [String: String] = {
-    guard let filePath = Bundle.main.path(forResource: "KeyBinding", ofType: "strings"),
-      let dic = NSDictionary(contentsOfFile: filePath) as? [String : String] else {
-        return [:]
-    }
-    return dic
-  }()
+  /// The queue the translator's tables are read on, so that the main thread does not wait for the file system.
+  static let queue = DispatchQueue(label: "IINAKeyBindingTranslator", qos: .userInitiated)
 
-  static let mpvCmdFormat: [String: String] = {
-    guard let filePath = Bundle.main.path(forResource: "MPVCommandFormat", ofType: "strings"),
+  /// The strings of KeyBinding.strings, once `load(then:)` has read them on `queue`, and empty until then. Read and set on the main
+  /// thread; a test empties it to have the tables read again.
+  static var l10nDic: [String: String] = [:]
+
+  /// The command formats of MPVCommandFormat.strings, read with `l10nDic`.
+  static var mpvCmdFormat: [String: String] = [:]
+
+  /// The callers to tell on the main thread once the tables being read have been read, `nil` while they are not being read.
+  private static var whenLoaded: [() -> Void]?
+
+  /// Read the tables on `queue` unless they have been read, then call `completion` on the main thread once they have been, after the
+  /// completions asked for before it.
+  static func load(then completion: @escaping () -> Void) {
+    guard l10nDic.isEmpty else {
+      DispatchQueue.main.async(execute: completion)
+      return
+    }
+    guard whenLoaded == nil else {
+      whenLoaded?.append(completion)
+      return
+    }
+    whenLoaded = [completion]
+    queue.async {
+      let l10n = readStrings("KeyBinding")
+      let formats = readStrings("MPVCommandFormat")
+      DispatchQueue.main.async {
+        l10nDic = l10n
+        mpvCmdFormat = formats
+        let completions = whenLoaded ?? []
+        whenLoaded = nil
+        completions.forEach { $0() }
+      }
+    }
+  }
+
+  /// The strings of the strings file `name` in the app bundle.
+  private static func readStrings(_ name: String) -> [String: String] {
+    guard let filePath = Bundle.main.path(forResource: name, ofType: "strings"),
       let dic = NSDictionary(contentsOfFile: filePath) as? [String : String] else {
+        Logger.log("Cannot read \(name).strings", level: .error)
         return [:]
     }
     return dic
-  }()
+  }
 
   static private let UnsupportedCmdPrefix = [
     "no-osd", "osd-auto", "osd-bar", "osd-msg-bar", "raw", "repeatable", "expand-properties"

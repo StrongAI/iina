@@ -215,6 +215,8 @@ class ConfigEditor: SettingsAccessory.Base {
       kbTableView.reloadData()
     }
     loadConfigFile(Preference.string(for: .currentInputConfigName), true)
+    // The commands are shown translated with the key binding translator's tables, which are read off the main thread.
+    KeyBindingTranslator.load { [weak self] in self?.kbTableView.reloadData() }
   }
 
   /// This function firstly reloads the table data, select the config file row, then load the config file.

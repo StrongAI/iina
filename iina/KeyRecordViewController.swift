@@ -54,8 +54,11 @@ class KeyRecordViewController: NSViewController, KeyRecordViewDelegate, NSRuleEd
 
     ruleEditor.nestingMode = .single
     ruleEditor.canRemoveAllRows = false
-    ruleEditor.delegate = self
-    ruleEditor.addRow(self)
+    // The rule editor's commands are named from the key binding translator's tables, which are read off the main thread first.
+    KeyBindingTranslator.load { [self] in
+      ruleEditor.delegate = self
+      ruleEditor.addRow(self)
+    }
 
     keyLabel.delegate = self
     actionTextField.delegate = self
