@@ -540,7 +540,11 @@ class PlayerCore: NSObject {
       return
     }
     if str.first == "/" {
-      openURL(URL(fileURLWithPath: str))
+      // The URL is made on the open queue, since making it stats the path to tell whether it is a folder.
+      openQueue.async { [self] in
+        let url = URL(fileURLWithPath: str)
+        DispatchQueue.main.async { [self] in openURL(url) }
+      }
     } else {
       // For apps built with Xcode 15 or later the behavior of the URL initializer has changed when
       // running under macOS Sonoma or later. The behavior now matches URLComponents and will

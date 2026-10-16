@@ -57,12 +57,30 @@ class OpenSub {
             let requests = String(downloadResponse.requests)
             log("Download #\(requests), remaining quota \(remaining), quota resets in \(downloadResponse.resetTime)")
             let subFilename = "[\(self.index)]\(downloadResponse.fileName)"
-            guard let url = data.saveToFolder(Utility.tempDirURL, filename: subFilename) else {
-              resolver.reject(OnlineSubtitle.CommonError.fsError)
-              return
-            }
-            resolver.fulfill([url])
+            Subtitle.save(data, as: subFilename).done { resolver.fulfill([$0]) }.catch { resolver.reject($0) }
           }
+        }
+      }
+    }
+
+    /// The queue downloaded subtitles are written on, so that the main thread does not wait for the file system.
+    static let saveQueue = DispatchQueue(label: "IINAOpenSubSave", qos: .userInitiated)
+
+    /// Write the downloaded subtitle `data` to the temporary folder as `filename` on `saveQueue`, then fulfill with the file's URL,
+    /// or reject with `OnlineSubtitle.CommonError.fsError` once the alert telling the user has been asked for on the main thread.
+    static func save(_ data: Data, as filename: String) -> Promise<URL> {
+      Promise { resolver in
+        saveQueue.async {
+          let url = Utility.tempDirURL.appendingPathComponent(filename)
+          do {
+            try data.write(to: url)
+          } catch {
+            // The alert is shown on the main thread.
+            DispatchQueue.main.async { Utility.showAlert("error_saving_file", arguments: ["data", filename]) }
+            resolver.reject(OnlineSubtitle.CommonError.fsError)
+            return
+          }
+          resolver.fulfill(url)
         }
       }
     }
