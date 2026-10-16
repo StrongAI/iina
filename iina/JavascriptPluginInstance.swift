@@ -112,7 +112,9 @@ class JavascriptPluginInstance {
   @discardableResult
   func evaluateFile(_ url: URL, asModule: Bool = false) -> JSValue! {
     currentFileStack.append(url)
-    guard let content = plugin.entryScripts[url] ?? (try? String(contentsOf: url)) else {
+    // The script is the one read when the plugin was made, so that evaluating it does not make the script's thread, the main thread
+    // for most instances, wait for the file system.
+    guard let content = plugin.script(at: url) else {
       Logger.log("Cannot read script \(url.path)", level: .error, subsystem: subsystem)
       return JSValue(nullIn: js)
     }

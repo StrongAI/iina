@@ -71,14 +71,13 @@ class PluginManager {
         permissionCleared = await showPermissionsSheet(forPlugin: newPlugin, previousPlugin: plugin)
       }
       if permissionCleared {
-        // The old plugin's files are removed, and the new plugin is moved to their place and its entry scripts are read, on the
-        // install queue, so that the main thread does not wait for the file system. The plugin list and the instances, which the
-        // windows and the players use, are changed on the main thread once that is done.
+        // The old plugin's files are removed, and the new plugin is moved to their place, on the install queue, so that the main
+        // thread does not wait for the file system. The plugin list and the instances, which the windows and the players use, are
+        // changed on the main thread once that is done, the instances evaluating the scripts read when the new plugin was made.
         let oldRoot = plugin.root
         try await JavascriptPlugin.onInstallQueue {
           try? FileManager.default.removeItem(at: oldRoot)
           newPlugin.normalizePath()
-          newPlugin.readEntryScripts()
         }
         if let pos = JavascriptPlugin.plugins.firstIndex(of: plugin) {
           JavascriptPlugin.plugins.remove(at: pos)
@@ -86,8 +85,6 @@ class PluginManager {
         }
         newPlugin.reloadGlobalInstance()
         PlayerCore.reloadPluginForAll(newPlugin, forced: true)
-        // Instances made from here on read their entry scripts from the files.
-        newPlugin.entryScripts = [:]
         return (.installed, newPlugin)
       }
       return (.cancelled, nil)

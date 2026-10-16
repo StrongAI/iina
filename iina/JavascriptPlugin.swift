@@ -68,20 +68,8 @@ class JavascriptPlugin: NSObject {
         return
       }
       registerSubProviders()
-      // The instances of the plugin read its entry scripts, which are read on the install queue first, so that the main thread does
-      // not wait for the file system. The instances are made on the main thread once they are read, unless the plugin has been
-      // disabled meanwhile.
-      let urls = [entryURL, globalEntryURL].compactMap { $0 }
-      JavascriptPlugin.installQueue.async { [self] in
-        let scripts = urls.reduce(into: [URL: String]()) { $0[$1] = try? String(contentsOf: $1) }
-        DispatchQueue.main.async { [self] in
-          guard enabled else { return }
-          entryScripts = scripts
-          reloadInstances()
-          // Instances made from here on read their entry scripts from the files.
-          entryScripts = [:]
-        }
-      }
+      // The instances evaluate the scripts read when the plugin was made, so making them reads no file.
+      reloadInstances()
     }
   }
 
@@ -615,6 +603,7 @@ class JavascriptPlugin: NSObject {
     super.init()
 
     makeFolders()
+    readScripts()
 
     if (enabled) {
       // A plugin is made on `installQueue` when it is installed or updated, while the subtitle providers are registered on the main
@@ -674,15 +663,32 @@ class JavascriptPlugin: NSObject {
     }
   }
 
-  /// The entry scripts read on `installQueue` for the instances made once the plugin is updated, by the URL of each script. An
-  /// instance whose entry script is not here reads it from its file.
-  var entryScripts: [URL: String] = [:]
+  /// The plugin's scripts by their paths in its folder: its `.js` files and its entry scripts, read when the plugin is made, which the
+  /// app does on `installQueue`, so that an instance evaluating them or a script requiring one does not make the main thread wait
+  /// for the file system. A plugin made again, as reloading the plugins does, reads them again.
+  private var scripts: [String: String] = [:]
 
-  /// Read the entry scripts of the plugin into `entryScripts`.
-  func readEntryScripts() {
-    for url in [entryURL, globalEntryURL].compactMap({ $0 }) {
-      entryScripts[url] = try? String(contentsOf: url)
+  /// Read the plugin's scripts into `scripts`.
+  private func readScripts() {
+    let paths = FileManager.default.subpaths(atPath: root.path)?.filter { $0.hasSuffix(".js") } ?? []
+    let urls = paths.map { root.appendingPathComponent($0).standardized } + [entryURL, globalEntryURL].compactMap { $0 }
+    for url in urls {
+      guard let path = pathInFolder(url), scripts[path] == nil, let content = try? String(contentsOf: url) else { continue }
+      scripts[path] = content
     }
+  }
+
+  /// The script at `url` read when the plugin was made, or `nil` if there is none.
+  func script(at url: URL) -> String? {
+    pathInFolder(url).flatMap { scripts[$0] }
+  }
+
+  /// The path of `url` in the plugin's folder, which stays the same when the folder is moved, or `nil` if `url` is not in it.
+  private func pathInFolder(_ url: URL) -> String? {
+    let folder = root.standardized.path + "/"
+    let path = url.standardized.path
+    guard path.hasPrefix(folder) else { return nil }
+    return String(path.dropFirst(folder.count))
   }
 
   @discardableResult
