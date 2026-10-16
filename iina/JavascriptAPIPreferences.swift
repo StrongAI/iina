@@ -10,26 +10,38 @@ import Foundation
 import JavaScriptCore
 
 @objc protocol JavascriptAPIPreferencesExportable: JSExport {
-  func get(_ key: String) -> Any?
-  func set(_ key: String, _ value: Any)
+  func get(_ key: String) -> JSValue
+  func set(_ key: String, _ value: Any) -> JSValue
   func sync()
 }
 
 class JavascriptAPIPreferences: JavascriptAPI, JavascriptAPIPreferencesExportable {
-  @objc func get(_ key: String) -> Any? {
+  @objc func get(_ key: String) -> JSValue {
     let plugin = pluginInstance.plugin!
-    if let value = plugin.preferences[key] {
-      return value
+    let subsystem = pluginInstance.subsystem
+    return createPromise { resolve, _ in
+      // The preferences file is read on the plugins' preferences queue, so that the script's thread does not wait for the file
+      // system. The promise is settled on the main thread.
+      plugin.loadPreferences {
+        if let value = plugin.preferences[key] ?? plugin.defaultPreferences[key] {
+          resolve.call(withArguments: [value])
+          return
+        }
+        Logger.log("Trying to get preference value for undefined key \(key)", level: .warning, subsystem: subsystem)
+        resolve.call(withArguments: [])
+      }
     }
-    if let value = plugin.defaultPreferences[key] {
-      return value
-    }
-    Logger.log("Trying to get preference value for undefined key \(key)", level: .warning, subsystem: pluginInstance.subsystem)
-    return nil
   }
 
-  @objc func set(_ key: String, _ value: Any) {
-    pluginInstance.plugin.preferences[key] = value
+  @objc func set(_ key: String, _ value: Any) -> JSValue {
+    let plugin = pluginInstance.plugin!
+    return createPromise { resolve, _ in
+      // The value is set once the preferences file has been read, so that the value read does not replace it.
+      plugin.loadPreferences {
+        plugin.preferences[key] = value
+        resolve.call(withArguments: [])
+      }
+    }
   }
 
   @objc func sync() {

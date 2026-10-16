@@ -825,28 +825,33 @@ extension PluginDetailsWindow: WKScriptMessageHandler, WKNavigationDelegate {
     guard let name = dict[0] as? String else { return }
     guard let data = dict[1] as? [Any], let prefName = data[0] as? String else { return }
 
+    // The preferences are used once the plugin's preferences file has been read, which is not done on the main thread.
     if name == "set" {
-      plugin.preferences[prefName] = data[1]
+      plugin.loadPreferences { [self] in
+        plugin.preferences[prefName] = data[1]
+      }
     } else if name == "get" {
-      var value: Any? = nil
-      if let v = plugin.preferences[prefName] {
-        value = v
-      } else if let v = plugin.defaultPreferences[prefName] {
-        value = v
-      }
-      let result: String
-      if let value {
-        if JSONSerialization.isValidJSONObject(value), let json = try? String(data: JSONSerialization.data(withJSONObject: value, options: []), encoding: .utf8) {
-          result = json
-        } else if value is String {
-          result = "\"\(value)\""
-        } else {
-          result = "\(value)"
+      plugin.loadPreferences { [self] in
+        var value: Any? = nil
+        if let v = plugin.preferences[prefName] {
+          value = v
+        } else if let v = plugin.defaultPreferences[prefName] {
+          value = v
         }
-      } else {
-        result = "null"
+        let result: String
+        if let value {
+          if JSONSerialization.isValidJSONObject(value), let json = try? String(data: JSONSerialization.data(withJSONObject: value, options: []), encoding: .utf8) {
+            result = json
+          } else if value is String {
+            result = "\"\(value)\""
+          } else {
+            result = "\(value)"
+          }
+        } else {
+          result = "null"
+        }
+        webView.evaluateJavaScript("window.iina._call(\(data[1]), \(result))")
       }
-      webView.evaluateJavaScript("window.iina._call(\(data[1]), \(result))")
     } else if name == "error" {
       Logger.log("JS:\(plugin.name) Preference page \(data[0]) \(data[2]),\(data[3]): \(data[4])")
     } else if name == "log" {

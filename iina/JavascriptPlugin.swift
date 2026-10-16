@@ -120,9 +120,42 @@ class JavascriptPlugin: NSObject {
 
   var supportAutoUpdate: Bool { githubRepo == nil || githubVersion == nil }
 
-  lazy var preferences: [String: Any] = {
-    NSDictionary(contentsOfFile: preferencesFileURL.path) as? [String: Any] ?? [:]
-  }()
+  /// The queue the plugins' preferences files are read on, so that the main thread does not wait for the file system.
+  static let preferencesQueue = DispatchQueue(label: "com.colliderli.iina.plugin.preferences", qos: .userInitiated)
+
+  /// The plugin's preferences, read from its preferences file by `loadPreferences(then:)` and empty until then, with the values set
+  /// since. Read and set on the main thread once `loadPreferences(then:)` has called back.
+  var preferences: [String: Any] = [:]
+
+  /// Whether the preferences file has been read into `preferences`.
+  private var preferencesLoaded = false
+
+  /// The callers to tell on the main thread once the preferences file being read has been read, `nil` while it is not being read.
+  private var whenPreferencesLoaded: [() -> Void]?
+
+  /// Read the preferences file on `preferencesQueue` unless it has been read, then call `completion` on the main thread once it has
+  /// been, after the completions asked for before it.
+  func loadPreferences(then completion: @escaping () -> Void) {
+    guard !preferencesLoaded else {
+      DispatchQueue.main.async(execute: completion)
+      return
+    }
+    guard whenPreferencesLoaded == nil else {
+      whenPreferencesLoaded?.append(completion)
+      return
+    }
+    whenPreferencesLoaded = [completion]
+    JavascriptPlugin.preferencesQueue.async { [self] in
+      let read = NSDictionary(contentsOfFile: preferencesFileURL.path) as? [String: Any] ?? [:]
+      DispatchQueue.main.async { [self] in
+        preferences = read
+        preferencesLoaded = true
+        let completions = whenPreferencesLoaded ?? []
+        whenPreferencesLoaded = nil
+        completions.forEach { $0() }
+      }
+    }
+  }
   let defaultPreferences: [String: Any]
 
   static func recreateAllPlugins() {
@@ -610,12 +643,15 @@ class JavascriptPlugin: NSObject {
   }
 
   func syncPreferences() {
-    let url = preferencesFileURL
-    Utility.createFileIfNotExist(url: url)
-    do {
-      try (preferences as NSDictionary).write(to: url)
-    } catch let e {
-      Logger.log("Unable to write preferences file: \(e.localizedDescription)", level: .error)
+    // The file is written once it has been read, so that preferences not yet read are not written over.
+    loadPreferences { [self] in
+      let url = preferencesFileURL
+      Utility.createFileIfNotExist(url: url)
+      do {
+        try (preferences as NSDictionary).write(to: url)
+      } catch let e {
+        Logger.log("Unable to write preferences file: \(e.localizedDescription)", level: .error)
+      }
     }
   }
 
