@@ -238,7 +238,8 @@ class VideoView: NSView {
 
   // This should only be called if the window has changed displays
   func updateDisplayLink() {
-    guard let window, let link, let screen = window.screen,
+    // Once the video is uninitialized the player's mpv handle is destroyed, and the window may still change screen.
+    guard !isUninited, let window, let link, let screen = window.screen,
           let displayId = screen.displayId else { return }
 
     // Do nothing if on the same display

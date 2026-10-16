@@ -106,8 +106,9 @@ class MPVController: NSObject {
   ///     processing _must be_ queued to another dispatch queue.
   /// - Important: To avoid using locking to prevent data races the convention is that processing involving data used by the UI is
   ///     never performed while running on this queue's thread and instead is queued for processing by the main thread .
-  private lazy var queue = DispatchQueue(label: "com.colliderli.iina.controller",
-                                         qos: .userInitiated)
+  /// - Note: The handle is destroyed on this queue by `mpvDestroy`, once no more events are read.
+  lazy var queue = DispatchQueue(label: "com.colliderli.iina.controller",
+                                 qos: .userInitiated)
 
   /// [DispatchQueue](https://developer.apple.com/documentation/dispatch/dispatchqueue) for adding hooks, which waits for
   /// `mpv`'s core, so that no other thread waits for it.
@@ -793,8 +794,17 @@ class MPVController: NSObject {
     mpv_render_context_set_update_callback(mpvRenderContext, nil, nil)
     mpv_render_context_free(mpvRenderContext)
     self.mpvRenderContext = nil
-    mpv_destroy(mpv)
+    mpvDestroy()
+  }
+
+  /// Destroy the mpv handle without the calling thread waiting for `mpv` to finish with it.
+  ///
+  /// The handle is set to `nil` at once and destroyed on the queue events are read on, after the reading queued before it, so that
+  /// events are never read through a destroyed handle.
+  func mpvDestroy() {
+    let handle = mpv
     mpv = nil
+    queue.async { mpv_destroy(handle) }
   }
 
   func mpvReportSwap() {
@@ -1376,8 +1386,9 @@ class MPVController: NSObject {
   // Read event and handle it async
   private func readEvents() {
     queue.async {
-      while ((self.mpv) != nil) {
-        let event = mpv_wait_event(self.mpv, 0)!
+      // The handle is read once for each event: the main thread sets it to nil before it is destroyed on this queue.
+      while let mpv = self.mpv {
+        let event = mpv_wait_event(mpv, 0)!
         let eventId = event.pointee.event_id
         // Do not deal with mpv-event-none
         if eventId == MPV_EVENT_NONE {
