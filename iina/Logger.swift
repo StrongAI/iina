@@ -133,44 +133,85 @@ class Logger: NSObject {
   /// Whether messages are written to the log file. Settable so that tests can write to the log file.
   @Atomic static var enabled = Preference.bool(for: .enableAdvancedSettings) && Preference.bool(for: .enableLogging)
 
-  static let logDirectory: URL = {
-    // get path
-    let libraryPaths = FileManager.default.urls(for: .libraryDirectory, in: .userDomainMask)
-    guard let libraryPath = libraryPaths.first else {
-      fatalDuringInit("Cannot get path to Logs directory: \(libraryPaths)")
+  /// This session's log folder once `makeLogDirectory()` has made it, and `nil` until then. Settable so that tests can have the
+  /// folder made again.
+  @Atomic static var logDirectory: URL?
+
+  /// Held while this session's log folder is made, so that it is made once, whichever queue asks for it first.
+  private static let logDirectoryLock = Lock()
+
+  /// Make this session's log folder in the user's Logs folder, unless it has been made, and answer it.
+  ///
+  /// It is called off the main thread, by the first line written to the log file on `fileQueue` and by `openLogDirectory()` on
+  /// `Utility.workspaceQueue`, since finding the Library folder and making the folders use the file system.
+  static func makeLogDirectory() -> URL {
+    logDirectoryLock.withLock {
+      if let logDirectory { return logDirectory }
+      // get path
+      let libraryPaths = FileManager.default.urls(for: .libraryDirectory, in: .userDomainMask)
+      guard let libraryPath = libraryPaths.first else {
+        fatalDuringInit("Cannot get path to Logs directory: \(libraryPaths)")
+      }
+      let logsUrl = libraryPath.appendingPathComponent("Logs", isDirectory: true)
+      let bundleID = Bundle.main.bundleIdentifier!
+      let appLogsUrl = logsUrl.appendingPathComponent(bundleID, isDirectory: true)
+
+      // MUST NOT use the similar method in Utilities as that method uses Logger methods. Logger
+      // methods must not ever be called while the logger is still initializing.
+      createDirIfNotExist(url: logsUrl)
+
+      let formatter = DateFormatter()
+      formatter.dateFormat = "yyyy-MM-dd-HH-mm-ss"
+      let timeString  = formatter.string(from: Date())
+      let token = Utility.ShortCodeGenerator.getCode(length: 6)
+      let sessionDirName = "\(timeString)_\(token)"
+      let sessionDir = appLogsUrl.appendingPathComponent(sessionDirName, isDirectory: true)
+
+      // MUST NOT use the similar method in Utilities. See above for reason.
+      createDirIfNotExist(url: sessionDir)
+      logDirectory = sessionDir
+      return sessionDir
     }
-    let logsUrl = libraryPath.appendingPathComponent("Logs", isDirectory: true)
-    let bundleID = Bundle.main.bundleIdentifier!
-    let appLogsUrl = logsUrl.appendingPathComponent(bundleID, isDirectory: true)
+  }
 
-    // MUST NOT use the similar method in Utilities as that method uses Logger methods. Logger
-    // methods must not ever be called while the logger is still initializing.
-    createDirIfNotExist(url: logsUrl)
-
-    let formatter = DateFormatter()
-    formatter.dateFormat = "yyyy-MM-dd-HH-mm-ss"
-    let timeString  = formatter.string(from: Date())
-    let token = Utility.ShortCodeGenerator.getCode(length: 6)
-    let sessionDirName = "\(timeString)_\(token)"
-    let sessionDir = appLogsUrl.appendingPathComponent(sessionDirName, isDirectory: true)
-
-    // MUST NOT use the similar method in Utilities. See above for reason.
-    createDirIfNotExist(url: sessionDir)
-    return sessionDir
-  }()
-
-  private static let logFile: URL = logDirectory.appendingPathComponent("iina.log")
+  /// Open this session's log folder in its default app, making it on `Utility.workspaceQueue` if it has not been made, so that the
+  /// main thread does not wait for the file system.
+  static func openLogDirectory() {
+    Utility.onWorkspaceQueue { _ = Utility.makeWorkspaceRequest(.open(makeLogDirectory())) }
+  }
 
   private static let loggerSubsystem = Logger.makeSubsystem("logger")
 
-  private static var logFileHandle: FileHandle? = {
-    FileManager.default.createFile(atPath: logFile.path, contents: nil, attributes: nil)
-    do {
-      return try FileHandle(forWritingTo: logFile)
-    } catch  {
-      fatalDuringInit("Cannot open log file \(logFile.path) for writing: \(error.localizedDescription)")
+  /// The state of the log file, which the first line written opens and `closeLogFile(completion:)` closes, each on `fileQueue`.
+  enum LogFile {
+    case unopened
+    case open(FileHandle, path: String)
+    case closed
+  }
+
+  /// The log file. Read and set on `fileQueue`; a test sets it while the queue is held, to have the file opened again.
+  static var logFile: LogFile = .unopened
+
+  /// The handle of the log file, opening the file in this session's log folder if it has not been opened, or `nil` once it is
+  /// closed. Called on `fileQueue`.
+  private static func openedLogFileHandle() -> FileHandle? {
+    switch logFile {
+    case .open(let fileHandle, _):
+      return fileHandle
+    case .closed:
+      return nil
+    case .unopened:
+      let file = makeLogDirectory().appendingPathComponent("iina.log")
+      FileManager.default.createFile(atPath: file.path, contents: nil, attributes: nil)
+      do {
+        let fileHandle = try FileHandle(forWritingTo: file)
+        logFile = .open(fileHandle, path: file.path)
+        return fileHandle
+      } catch {
+        fatalDuringInit("Cannot open log file \(file.path) for writing: \(error.localizedDescription)")
+      }
     }
-  }()
+  }
 
   private static let dateFormatter: DateFormatter = {
     let formatter = DateFormatter()
@@ -197,7 +238,10 @@ class Logger: NSObject {
     // file to be flushed.
     fileQueue.async {
       defer { completion.map { DispatchQueue.main.async(execute: $0) } }
-      guard let fileHandle = logFileHandle else { return }
+      guard case let .open(fileHandle, path) = logFile else {
+        logFile = .closed
+        return
+      }
       do {
         // The deprecated method is used instead of the new close method that throws swift exceptions
         // because testing with the new write method found it failed to convert all objective-c
@@ -205,10 +249,10 @@ class Logger: NSObject {
         try ObjcUtils.catchException { fileHandle.closeFile() }
       } catch {
         // Unusual, but could happen if closing causes a buffer to be flushed to a full disk.
-        print(formatMessage("Cannot close log file \(logFile.path): \(error.localizedDescription)",
+        print(formatMessage("Cannot close log file \(path): \(error.localizedDescription)",
                             .error, Logger.loggerSubsystem, true))
       }
-      logFileHandle = nil
+      logFile = .closed
     }
   }
 
@@ -310,7 +354,7 @@ class Logger: NSObject {
     // The first write opens the file.
     fileQueue.async {
       // The logger may be called after it has been closed.
-      guard let logFileHandle else { return }
+      guard let logFileHandle = openedLogFileHandle() else { return }
       do {
         // The deprecated write method is used instead of the replacement method that throws swift
         // exceptions because testing the new method with macOS 12.5.1 showed that method failed to

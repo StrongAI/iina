@@ -73,7 +73,7 @@ class PrefAdvancedViewController: PreferenceViewController, PreferenceWindowEmbe
   // MARK: - IBAction
 
   @IBAction func openLogDir(_ sender: AnyObject) {
-    Utility.open(Logger.logDirectory)
+    Logger.openLogDirectory()
   }
   
   @IBAction func showLogWindow(_ sender: AnyObject) {

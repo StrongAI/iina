@@ -392,8 +392,10 @@ class MPVController: NSObject {
     }
 
     // log
-    if Logger.enabled {
-      let path = Logger.logDirectory.appendingPathComponent("mpv.log").path
+    // The log folder is made off the main thread when the first line is written to the log file, so that starting mpv does not wait
+    // for the file system. mpv is given a log file only if the folder has been made by the time it starts.
+    if Logger.enabled, let logDirectory = Logger.logDirectory {
+      let path = logDirectory.appendingPathComponent("mpv.log").path
       chkErr(setOptionString(MPVOption.ProgramBehavior.logFile, path, level: .verbose))
     }
 

@@ -160,7 +160,7 @@ class SettingsPageAdvanced: SettingsPage {
   }
 
   @objc private func openLogFolder() {
-    Utility.open(Logger.logDirectory)
+    Logger.openLogDirectory()
   }
 }
 
