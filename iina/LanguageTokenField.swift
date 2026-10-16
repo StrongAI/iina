@@ -119,6 +119,12 @@ class LanguageTokenField: NSTokenField {
     // Cannot use commas, because language descriptions are used as editing strings, and many of them contain commas, whitespace, quotes,
     // and NSTokenField will internally tokenize editing strings. We should be able to keep using CSV in the prefs
     self.tokenizingCharacterSet = .newlines
+    // The language list is read off the main thread. Until it is, a saved language is a token of its code, which is saved as the same
+    // code; once it is, the saved languages are made into tokens again, which carry their descriptions.
+    ISO639Helper.load { [weak self] in
+      guard let self else { return }
+      self.commaSeparatedValues = self.commaSeparatedValues
+    }
   }
 
   @objc func controlTextDidEndEditing(_ notification: Notification) {
