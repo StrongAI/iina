@@ -65,6 +65,13 @@ class InitialWindowController: NSWindowController {
   /// to and the icons it shows, so that the main thread does not wait for the file system or LaunchServices.
   static let fileQueue = DispatchQueue(label: "IINAInitialWindowFiles", qos: .userInitiated)
 
+  /// The recent documents the window lists, read on the main thread. A test replaces it, so that it lists a document without
+  /// writing to the recent-documents list it shares with the installed app.
+  static var recentDocumentURLs: () -> [URL] = { NSDocumentController.shared.recentDocumentURLs }
+
+  /// Looks up the icon of a recent document, on `fileQueue`. A test replaces it, to record the thread each icon is looked up on.
+  static var documentIcon: (URL) -> NSImage = { NSWorkspace.shared.icon(forFile: $0.path) }
+
   /// The recent documents the table lists, which leave out the last played file, and the icon of each, found on `fileQueue`.
   private(set) var recentDocuments: [URL] = []
   private var recentDocumentIcons: [NSImage] = []
@@ -345,7 +352,8 @@ class InitialWindowController: NSWindowController {
     let lastFile = Preference.bool(for: .recordRecentFiles) && Preference.bool(for: .resumeLastPosition)
       ? Preference.url(for: .iinaLastPlayedFilePath) : nil
     let lastPosition = Preference.double(for: .iinaLastPlayedFilePosition)
-    let documents = NSDocumentController.shared.recentDocumentURLs
+    let documents = Self.recentDocumentURLs()
+    let documentIcon = Self.documentIcon
     let verbose = Logger.isEmitting(.verbose)
     Self.fileQueue.async { [weak self] in
       let lastPlaybackURL = lastFile.flatMap { FileManager.default.fileExists(atPath: $0.path) ? $0 : nil }
@@ -354,7 +362,7 @@ class InitialWindowController: NSWindowController {
       // This is probably a kludge on Apple's part to avoid breaking legacy FreeBSD code.
       let resolvedLast = lastPlaybackURL?.resolvingSymlinksInPath()
       let recentDocuments = documents.filter { $0.resolvingSymlinksInPath() != resolvedLast }
-      let icons = recentDocuments.map { NSWorkspace.shared.icon(forFile: $0.path) }
+      let icons = recentDocuments.map(documentIcon)
 
       if verbose {
         Logger.log("InitialWindow.reloadData(): LastPlaybackURL: \(resolvedLast?.path ?? "<none>")", level: .verbose)
