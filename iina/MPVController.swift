@@ -113,6 +113,50 @@ class MPVController: NSObject {
   /// `mpv`'s core, so that no other thread waits for it.
   private lazy var hookQueue = DispatchQueue(label: "com.colliderli.iina.controller.hook", qos: .userInitiated)
 
+  /// Serial queue running the raw command strings key bindings ask for, which `mpv` has no asynchronous form of, and the requests
+  /// made while one of them is in flight, held behind it so that `mpv` handles requests in the order they were asked.
+  private let rawCommandQueue: DispatchQueue = {
+    let queue = DispatchQueue(label: "com.colliderli.iina.controller.raw", qos: .userInitiated)
+    queue.setSpecific(key: MPVController.rawCommandQueueKey, value: ())
+    return queue
+  }()
+
+  private static let rawCommandQueueKey = DispatchSpecificKey<Void>()
+
+  /// The raw command strings and the requests held behind them that `rawCommandQueue` has not finished.
+  @Atomic private var rawCommandQueueLength = 0
+
+  /// Hold the asynchronous `request` on `rawCommandQueue` behind the raw command strings and requests it has not finished, if there
+  /// are any, so that `mpv` is asked it after them.
+  /// - Returns: `true` if `request` was held, `false` if the caller is to make it now.
+  private func heldBehindRawCommand(_ request: @escaping () -> Void) -> Bool {
+    guard DispatchQueue.getSpecific(key: Self.rawCommandQueueKey) == nil else { return false }
+    return $rawCommandQueueLength.withLock { length in
+      guard length > 0 else { return false }
+      length += 1
+      rawCommandQueue.async { [self] in
+        if mpv != nil { request() }
+        $rawCommandQueueLength.withLock { $0 -= 1 }
+      }
+      return true
+    }
+  }
+
+  /// Make the synchronous `request` on `rawCommandQueue` behind the raw command strings and requests it has not finished, if there
+  /// are any, so that `mpv` is asked it after them. The calling thread waits for them, as it waits for `request` itself.
+  /// - Returns: What `request` returned, if it was made there, or `nil` if the caller is to make it now.
+  private func madeBehindRawCommand<T>(_ request: () -> T) -> T? {
+    guard DispatchQueue.getSpecific(key: Self.rawCommandQueueKey) == nil else { return nil }
+    let held = $rawCommandQueueLength.withLock { length in
+      guard length > 0 else { return false }
+      length += 1
+      return true
+    }
+    guard held else { return nil }
+    defer { $rawCommandQueueLength.withLock { $0 -= 1 } }
+    return rawCommandQueue.sync { request() }
+  }
+
   unowned let player: PlayerCore
 
   var needRecordSeekTime: Bool = false
@@ -814,6 +858,9 @@ class MPVController: NSObject {
   func command(_ command: MPVCommand, args: [String?] = [], checkError: Bool = true,
                level: Logger.Level = .debug, returnValueCallback: ((Int32) -> Void)? = nil) {
     guard mpv != nil else { return }
+    if madeBehindRawCommand({
+      self.command(command, args: args, checkError: checkError, level: level, returnValueCallback: returnValueCallback)
+    }) != nil { return }
     log("Run command: \(command.rawValue) \(args.compactMap{$0}.joined(separator: " "))", level: level)
     var cargs = makeCArgs(command, args).map { $0.flatMap { UnsafePointer<CChar>(strdup($0)) } }
     defer {
@@ -831,15 +878,30 @@ class MPVController: NSObject {
     }
   }
 
-  func command(rawString: String, level: Logger.Level = .debug) -> Int32 {
+  /// Run the raw command string `rawString` on `rawCommandQueue`, calling `reply` on the main thread with the error code `mpv`
+  /// returns for it. `mpv` has no asynchronous form of a command string, so the queue waits for `mpv` in place of the calling thread,
+  /// and the requests made while the command is in flight are held behind it, so that `mpv` handles them after it.
+  func command(rawString: String, level: Logger.Level = .debug, reply: @escaping (Int32) -> Void) {
     log("Run command: \(rawString)", level: level)
-    return mpv_command_string(mpv, rawString)
+    $rawCommandQueueLength.withLock { length in
+      length += 1
+      rawCommandQueue.async { [self] in
+        let returnValue = mpv == nil ? MPV_ERROR_UNINITIALIZED.rawValue : mpv_command_string(mpv, rawString)
+        $rawCommandQueueLength.withLock { $0 -= 1 }
+        DispatchQueue.main.async { reply(returnValue) }
+      }
+    }
   }
 
+  /// Run the given command asynchronously, returning the error code of sending it to `mpv`, or 0 when it is held behind a raw
+  /// command string, a failure to send it then being checked when it is sent.
   @discardableResult
   func asyncCommand(_ command: MPVCommand, args: [String?] = [], checkError: Bool = true,
                     replyUserdata: UInt64, level: Logger.Level = .debug) -> Int32 {
     guard mpv != nil else { return MPV_ERROR_UNINITIALIZED.rawValue }
+    if heldBehindRawCommand({
+      self.asyncCommand(command, args: args, checkError: checkError, replyUserdata: replyUserdata, level: level)
+    }) { return 0 }
     log("Asynchronously run command: \(command.rawValue) \(args.compactMap{$0}.joined(separator: " "))",
         level: level)
     var cargs = makeCArgs(command, args).map { $0.flatMap { UnsafePointer<CChar>(strdup($0)) } }
@@ -863,6 +925,7 @@ class MPVController: NSObject {
   /// sent. It is not called if `mpv` shuts down before replying.
   func asyncCommand(_ command: MPVCommand, args: [String?] = [], level: Logger.Level = .debug,
                     reply: @escaping (Int32) -> Void) {
+    if heldBehindRawCommand({ self.asyncCommand(command, args: args, level: level, reply: reply) }) { return }
     let userdata = replyCallbacks.register { error, _ in reply(error) }
     let returnValue = asyncCommand(command, args: args, checkError: false, replyUserdata: userdata, level: level)
     if returnValue < 0 {
@@ -876,6 +939,7 @@ class MPVController: NSObject {
 
   // Set property
   func setFlag(_ name: String, _ flag: Bool, level: Logger.Level = .debug) {
+    if madeBehindRawCommand({ setFlag(name, flag, level: level) }) != nil { return }
     log("Set property: \(name)=\(flag)", level: level)
     var data: Int32 = flag ? 1 : 0
     mpv_set_property(mpv, name, MPV_FORMAT_FLAG, &data)
@@ -886,6 +950,7 @@ class MPVController: NSObject {
   /// `mpv` handles asynchronous requests in the order they are made. A synchronous request made later can be handled first, but
   /// `mpv` handles this one right after it, before it carries on with playback.
   func setFlagAsync(_ name: String, _ flag: Bool, level: Logger.Level = .debug) {
+    if heldBehindRawCommand({ self.setFlagAsync(name, flag, level: level) }) { return }
     guard mpv != nil else { return }
     log("Asynchronously set property: \(name)=\(flag)", level: level)
     var data: Int32 = flag ? 1 : 0
@@ -893,12 +958,14 @@ class MPVController: NSObject {
   }
 
   func setInt(_ name: String, _ value: Int, level: Logger.Level = .debug) {
+    if madeBehindRawCommand({ setInt(name, value, level: level) }) != nil { return }
     log("Set property: \(name)=\(value)", level: level)
     var data = Int64(value)
     mpv_set_property(mpv, name, MPV_FORMAT_INT64, &data)
   }
 
   func setDouble(_ name: String, _ value: Double, level: Logger.Level = .debug) {
+    if madeBehindRawCommand({ setDouble(name, value, level: level) }) != nil { return }
     log("Set property: \(name)=\(value)", level: level)
     var data = value
     mpv_set_property(mpv, name, MPV_FORMAT_DOUBLE, &data)
@@ -906,6 +973,7 @@ class MPVController: NSObject {
 
   /// Set the given integer property asynchronously, without waiting for `mpv`, see `setFlagAsync`.
   func setIntAsync(_ name: String, _ value: Int, level: Logger.Level = .debug) {
+    if heldBehindRawCommand({ self.setIntAsync(name, value, level: level) }) { return }
     guard mpv != nil else { return }
     log("Asynchronously set property: \(name)=\(value)", level: level)
     var data = Int64(value)
@@ -914,6 +982,7 @@ class MPVController: NSObject {
 
   /// Set the given double property asynchronously, without waiting for `mpv`, see `setFlagAsync`.
   func setDoubleAsync(_ name: String, _ value: Double, level: Logger.Level = .debug) {
+    if heldBehindRawCommand({ self.setDoubleAsync(name, value, level: level) }) { return }
     guard mpv != nil else { return }
     log("Asynchronously set property: \(name)=\(value)", level: level)
     var data = value
@@ -922,12 +991,14 @@ class MPVController: NSObject {
 
   @discardableResult
   func setString(_ name: String, _ value: String, level: Logger.Level = .debug) -> Int32 {
+    if let returnValue = madeBehindRawCommand({ setString(name, value, level: level) }) { return returnValue }
     log("Set property: \(name)=\(value)", level: level)
     return mpv_set_property_string(mpv, name, value)
   }
 
   /// Set the given string property asynchronously, without waiting for `mpv`, see `setFlagAsync`.
   func setStringAsync(_ name: String, _ value: String, level: Logger.Level = .debug) {
+    if heldBehindRawCommand({ self.setStringAsync(name, value, level: level) }) { return }
     guard mpv != nil else { return }
     log("Asynchronously set property: \(name)=\(value)", level: level)
     value.withCString { cString in
@@ -939,6 +1010,7 @@ class MPVController: NSObject {
 
   @discardableResult
   func setStringToDefault(_ name: String, level: Logger.Level = .debug) -> Int32 {
+    if let returnValue = madeBehindRawCommand({ setStringToDefault(name, level: level) }) { return returnValue }
     guard let value = MPVOptionDefaults.shared.getString(name) else {
       log("Failed to obtain default for option: \(name)", level: .error)
       return MPV_ERROR_OPTION_NOT_FOUND.rawValue
@@ -955,18 +1027,21 @@ class MPVController: NSObject {
   }
 
   func getInt(_ name: String) -> Int {
+    if let value = madeBehindRawCommand({ getInt(name) }) { return value }
     var data = Int64()
     mpv_get_property(mpv, name, MPV_FORMAT_INT64, &data)
     return Int(data)
   }
 
   func getDouble(_ name: String) -> Double {
+    if let value = madeBehindRawCommand({ getDouble(name) }) { return value }
     var data = Double()
     mpv_get_property(mpv, name, MPV_FORMAT_DOUBLE, &data)
     return data
   }
 
   func getFlag(_ name: String) -> Bool {
+    if let flag = madeBehindRawCommand({ getFlag(name) }) { return flag }
     var data = Int32()
     mpv_get_property(mpv, name, MPV_FORMAT_FLAG, &data)
     return data > 0
@@ -979,6 +1054,7 @@ class MPVController: NSObject {
   /// the property. It is called on the calling thread when the request could not be made, and not at all if `mpv` shuts down before
   /// replying.
   func getFlagAsync(_ name: String, reply: @escaping (Bool?) -> Void) {
+    if heldBehindRawCommand({ self.getFlagAsync(name, reply: reply) }) { return }
     let userdata = replyCallbacks.register { error, data in
       guard error >= 0, let property = data?.assumingMemoryBound(to: mpv_event_property.self).pointee,
             property.format == MPV_FORMAT_FLAG, let value = property.data else {
@@ -1017,6 +1093,7 @@ class MPVController: NSObject {
   /// - Parameter read: Makes the value of a property from the data `mpv` answers in `format`.
   private func getPropertiesAsync(_ names: [String], format: mpv_format, reply: @escaping ([Any?]) -> Void,
                                   read: @escaping (UnsafeMutableRawPointer) -> Any?) {
+    if heldBehindRawCommand({ self.getPropertiesAsync(names, format: format, reply: reply, read: read) }) { return }
     guard !names.isEmpty else {
       reply([])
       return
@@ -1054,6 +1131,7 @@ class MPVController: NSObject {
   }
 
   func getString(_ name: String) -> String? {
+    if let value = madeBehindRawCommand({ getString(name) }) { return value }
     let cstr = mpv_get_property_string(mpv, name)
     let str: String? = cstr == nil ? nil : String(cString: cstr!)
     mpv_free(cstr)
@@ -1062,6 +1140,7 @@ class MPVController: NSObject {
 
   /** Get filter. only "af" or "vf" is supported for name */
   func getFilters(_ name: String) -> [MPVFilter] {
+    if let filters = madeBehindRawCommand({ getFilters(name) }) { return filters }
     Logger.ensure(name == MPVProperty.vf || name == MPVProperty.af, "getFilters() do not support \(name)!")
 
     var result: [MPVFilter] = []
@@ -1126,6 +1205,7 @@ class MPVController: NSObject {
   /// - Parameter reply: Called with `true` if the filter was removed, `false` if it was not, on the thread of the queue for reading
   ///     `mpv` events, or on the calling thread when no request could be made.
   func removeFilter(_ name: String, _ index: Int, reply: @escaping (Bool) -> Void) {
+    if heldBehindRawCommand({ self.removeFilter(name, index, reply: reply) }) { return }
     Logger.ensure(name == MPVProperty.vf || name == MPVProperty.af, "removeFilter() does not support \(name)!")
 
     let userdata = replyCallbacks.register { [self] error, data in
@@ -1222,6 +1302,7 @@ class MPVController: NSObject {
   }
 
   func getNode(_ name: String) -> Any? {
+    if let value = madeBehindRawCommand({ getNode(name) }) { return value }
     var node = mpv_node()
     mpv_get_property(mpv, name, MPV_FORMAT_NODE, &node)
     let parsed = try? MPVNode.parse(node)
@@ -1230,6 +1311,7 @@ class MPVController: NSObject {
   }
 
   func setNode(_ name: String, _ value: Any) {
+    if madeBehindRawCommand({ setNode(name, value) }) != nil { return }
     guard var node = try? MPVNode.create(value) else {
       log("setNode: cannot encode value for \(name)", level: .error)
       return
@@ -1241,6 +1323,7 @@ class MPVController: NSObject {
 
   /// Set the given property asynchronously to the given value as an `mpv` node, without waiting for `mpv`, see `setFlagAsync`.
   func setNodeAsync(_ name: String, _ value: Any) {
+    if heldBehindRawCommand({ self.setNodeAsync(name, value) }) { return }
     guard mpv != nil else { return }
     guard var node = try? MPVNode.create(value) else {
       log("setNodeAsync: cannot encode value for \(name)", level: .error)

@@ -1153,18 +1153,21 @@ class PlayerCore: NSObject {
   /// set to false, all screenshot commands will be ignored.
   /// 2. When no flags are given with `screenshot`: instead of defaulting to `subtitles` as mpv does, IINA will use the value for
   /// `Preference.Key.screenshotIncludeSubtitle` to decide between `subtitles` or `video`.
-  @discardableResult
-  func screenshot(fromKeyBinding keyBinding: KeyMapping? = nil) -> Bool {
+  /// - Parameter taken: Called on the main thread with whether the screenshot was asked of `mpv`, or, for a key binding run as a
+  ///     raw command string, whether `mpv` took it.
+  func screenshot(fromKeyBinding keyBinding: KeyMapping? = nil, taken: @escaping (Bool) -> Void = { _ in }) {
     let saveToFile = Preference.bool(for: .screenshotSaveToFile)
     let saveToClipboard = Preference.bool(for: .screenshotCopyToClipboard)
     guard saveToFile || saveToClipboard else {
       log("Ignoring screenshot request: all forms of screenshots are disabled in prefs", level: .warning)
-      return false
+      taken(false)
+      return
     }
 
     guard let vid = info.vid, vid > 0 else {
       log("Ignoring screenshot request: no video stream is being played", level: .warning)
-      return false
+      taken(false)
+      return
     }
 
     log("Screenshot requested by user\(keyBinding == nil ? "" : " (rawAction: \(keyBinding!.rawAction))")")
@@ -1176,7 +1179,8 @@ class PlayerCore: NSObject {
 
       guard let commandName = keyBinding.action.first, commandName == MPVCommand.screenshot.rawValue else {
         log("Cannot take screenshot: unexpected first token in key binding action: \(keyBinding.rawAction)", level: .error)
-        return false
+        taken(false)
+        return
       }
       if keyBinding.action.count > 1 {
         commandFlags = keyBinding.action[1].split(separator: "+").map{String($0)}
@@ -1198,8 +1202,8 @@ class PlayerCore: NSObject {
       }
 
       if !canUseIINAScreenshot {
-        let returnValue = mpv.command(rawString: keyBinding.rawAction)
-        return returnValue == 0
+        mpv.command(rawString: keyBinding.rawAction) { taken($0 == 0) }
+        return
       }
     }
 
@@ -1209,7 +1213,7 @@ class PlayerCore: NSObject {
     }
 
     mpv.asyncCommand(.screenshot, args: commandFlags, replyUserdata: MPVController.UserData.screenshot)
-    return true
+    taken(true)
   }
 
   /// Initializes and returns an image object with the contents of the specified URL.

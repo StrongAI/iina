@@ -1063,11 +1063,12 @@ class MainWindowController: PlayerWindowController {
     super.keyDown(with: event)
   }
 
-  @discardableResult
-  override func handleKeyBinding(_ keyBinding: KeyMapping) -> Bool {
-    let success = super.handleKeyBinding(keyBinding)
-    if success && keyBinding.action.first! == MPVCommand.screenshot.rawValue {
-      player.sendOSD(.screenshot)
+  override func handleKeyBinding(_ keyBinding: KeyMapping, handled: @escaping (Bool) -> Void = { _ in }) {
+    super.handleKeyBinding(keyBinding) { [self] success in
+      if success && keyBinding.action.first! == MPVCommand.screenshot.rawValue {
+        player.sendOSD(.screenshot)
+      }
+      handled(success)
     }
 
     if !keyBinding.isIINACommand {
@@ -1077,8 +1078,6 @@ class MainWindowController: PlayerWindowController {
       default: ()
       }
     }
-
-    return success
   }
 
   override func pressureChange(with event: NSEvent) {

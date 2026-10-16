@@ -285,26 +285,32 @@ class PlayerWindowController: NSWindowController, NSWindowDelegate {
   // MARK: - Mouse / Trackpad events
 
 
-  @discardableResult
-  func handleKeyBinding(_ keyBinding: KeyMapping) -> Bool {
+  /// Run the IINA command or the `mpv` command `keyBinding` is bound to without waiting for `mpv`, calling `handled` on the main
+  /// thread with whether it succeeded.
+  func handleKeyBinding(_ keyBinding: KeyMapping, handled: @escaping (Bool) -> Void = { _ in }) {
     if keyBinding.isIINACommand {
       // - IINA command
       if let iinaCommand = IINACommand(rawValue: keyBinding.rawAction) {
         handleIINACommand(iinaCommand)
-        return true
+        handled(true)
       } else {
         log("Unknown iina command \(keyBinding.rawAction)", level: .error)
-        return false
+        handled(false)
       }
     } else {
       // - mpv command
-      let returnValue: Int32
+      func report(_ returnValue: Int32) {
+        if returnValue != 0 {
+          log("Return value \(returnValue) when executing key command \(keyBinding.rawAction)", level: .error)
+        }
+        handled(returnValue == 0)
+      }
       // execute the command
       switch keyBinding.action.first! {
 
       case MPVCommand.abLoop.rawValue:
         abLoop()
-        returnValue = 0
+        report(0)
 
       case MPVCommand.quit.rawValue:
         // Initiate application termination. AppKit requires this be done from the main thread,
@@ -316,20 +322,13 @@ class PlayerWindowController: NSWindowController, NSWindowDelegate {
         RunLoop.main.perform(inModes: [.common]) {
           NSApp.terminate(nil)
         }
-        returnValue = 0
+        report(0)
 
       case MPVCommand.screenshot.rawValue:
-        return player.screenshot(fromKeyBinding: keyBinding)
+        player.screenshot(fromKeyBinding: keyBinding, taken: handled)
 
       default:
-        returnValue = player.mpv.command(rawString: keyBinding.rawAction)
-      }
-
-      if returnValue == 0 {
-        return true
-      } else {
-        log("Return value \(returnValue) when executing key command \(keyBinding.rawAction)", level: .error)
-        return false
+        player.mpv.command(rawString: keyBinding.rawAction, reply: report)
       }
     }
   }
