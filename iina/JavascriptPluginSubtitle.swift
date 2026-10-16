@@ -38,7 +38,8 @@ class JSPluginSub {
             resolver.reject(Error.pluginError("provider.download should return an array of strings."))
             return
           }
-          resolver.fulfill(urls.compactMap{ self.api.parsePath($0).path }.map(URL.init(fileURLWithPath:)))
+          // The paths name the subtitle files downloaded, so their URLs are made as files', without reading the file system.
+          resolver.fulfill(urls.compactMap{ self.api.parsePath($0).path }.map { URL(fileURLWithPath: $0, isDirectory: false) })
         }
         let failed: @convention(block) (String) -> Void = {
           resolver.reject(Error.pluginError($0))
