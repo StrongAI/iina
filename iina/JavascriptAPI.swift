@@ -159,8 +159,7 @@ class JavascriptAPI: NSObject {
 }
 
 
-func createUInt8Array(fromData data: Data) -> JSValue? {
-  let context = JSContext.current()!
+func createUInt8Array(fromData data: Data, in context: JSContext = JSContext.current()!) -> JSValue? {
   let length = data.count
 
   let rawPtr = UnsafeMutableBufferPointer<UInt8>.allocate(capacity: length)

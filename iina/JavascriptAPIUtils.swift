@@ -23,7 +23,7 @@ fileprivate extension Process {
 }
 
 @objc protocol JavascriptAPIUtilsExportable: JSExport {
-  func fileInPath(_ file: String) -> Bool
+  func fileInPath(_ file: String) -> JSValue
   func resolvePath(_ path: String) -> String?
   func exec(_ file: String, _ args_: Any, _ cwd: JSValue?, _ stdoutHook_: JSValue?, _ stderrHook_: JSValue?) -> JSValue?
   func ask(_ title: String) -> Bool
@@ -86,20 +86,20 @@ class JavascriptAPIUtils: JavascriptAPI, JavascriptAPIUtilsExportable {
     """)
   }
 
-  func fileInPath(_ file: String) -> Bool {
-    guard permitted(to: .accessFileSystem) else {
-      return false
+  func fileInPath(_ file: String) -> JSValue {
+    guard permitted(to: .accessFileSystem), !file.isEmpty else {
+      return createPromise { resolve, _ in resolve.call(withArguments: [false]) }
     }
-    if file.isEmpty {
-      return false
+    let path = parsePath(file, forceLocalPath: false).path
+    return createPromise { [unowned self] resolve, _ in
+      // The binary is looked for on the plugin's queue, as exec looks for it, so that the script's thread does not wait for the
+      // file system. The promise is settled on the main thread.
+      self.pluginInstance.queue.async {
+        let found = searchBinary(file, in: Utility.binariesURL) != nil || searchBinary(file, in: Utility.exeDirURL) != nil
+          || path.map { FileManager.default.fileExists(atPath: $0) } ?? false
+        DispatchQueue.main.async { resolve.call(withArguments: [found]) }
+      }
     }
-    if let _ = searchBinary(file, in: Utility.binariesURL) ?? searchBinary(file, in: Utility.exeDirURL) {
-      return true
-    }
-    if let path = parsePath(file, forceLocalPath: false).path {
-      return FileManager.default.fileExists(atPath: path)
-    }
-    return false
   }
 
   func resolvePath(_ path: String) -> String? {
