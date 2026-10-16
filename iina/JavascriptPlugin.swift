@@ -290,6 +290,55 @@ class JavascriptPlugin: NSObject {
     }
   }
 
+  /// Install the plugin packages in the folder at `path` whose plugins are not installed, then call `completion` on the main thread
+  /// with whether every package was found and installed.
+  ///
+  /// The packages are found and unpacked, and their plugins moved into the plugins folder, on `installQueue`, so that the main thread
+  /// does not wait for the file system or for the processes that unpack them. The plugins are added to the plugin list and enabled
+  /// on the main thread, which the list and the plugins' instances belong to.
+  static func installPackages(in path: String?, then completion: @escaping (Bool) -> Void) {
+    installQueue.async {
+      var hasError = false
+      var unpacked: [JavascriptPlugin] = []
+      if let path, FileManager.default.fileExists(atPath: path),
+         let contents = try? FileManager.default.contentsOfDirectory(atPath: path) {
+        contents.filter { $0.hasSuffix(".iinaplgz") }
+          .forEach {
+            do {
+              unpacked.append(try create(fromPackageURL: URL(fileURLWithPath: path.appending("/\($0)"))))
+            } catch let error {
+              hasError = true
+              Logger.log(error.localizedDescription, level: .error)
+            }
+          }
+      } else {
+        hasError = true
+        Logger.log("Cannot find default plugins", level: .error)
+      }
+
+      DispatchQueue.main.async { [unpacked, hasError] in
+        let fresh = unpacked.filter { plugin in
+          guard !plugins.contains(where: { $0.identifier == plugin.identifier }) else {
+            Logger.log("Skipped \(plugin.identifier), already installed")
+            return false
+          }
+          return true
+        }
+        installQueue.async {
+          fresh.forEach { $0.normalizePath() }
+          DispatchQueue.main.async {
+            for plugin in fresh {
+              plugins.append(plugin)
+              plugin.enabled = true
+              Logger.log("Installed \(plugin.identifier)")
+            }
+            completion(!hasError)
+          }
+        }
+      }
+    }
+  }
+
   /// Makes each HTTP GET request of finding, downloading and updating a plugin on GitHub, waiting for its answer. It exists so that
   /// tests can answer the requests in its place, without the network.
   static var getFromGitHub: (String) -> HTTPResult = { Just.get($0) }
@@ -689,14 +738,18 @@ class JavascriptPlugin: NSObject {
   }
 
   func syncPreferences() {
-    // The file is written once it has been read, so that preferences not yet read are not written over.
+    // The file is written once it has been read, so that preferences not yet read are not written over, and on the plugins'
+    // preferences queue, so that the main thread does not wait for the file system.
     loadPreferences { [self] in
-      let url = preferencesFileURL
-      Utility.createFileIfNotExist(url: url)
-      do {
-        try (preferences as NSDictionary).write(to: url)
-      } catch let e {
-        Logger.log("Unable to write preferences file: \(e.localizedDescription)", level: .error)
+      let values = preferences as NSDictionary
+      JavascriptPlugin.preferencesQueue.async { [self] in
+        let url = preferencesFileURL
+        Utility.createFileIfNotExist(url: url)
+        do {
+          try values.write(to: url)
+        } catch let e {
+          Logger.log("Unable to write preferences file: \(e.localizedDescription)", level: .error)
+        }
       }
     }
   }
