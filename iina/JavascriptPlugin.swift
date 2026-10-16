@@ -227,21 +227,22 @@ class JavascriptPlugin: NSObject {
           return JavascriptPlugin(filename: path.lastPathComponent, externalURL: isDev ? path : nil)
         }
 
-      // The alert is shown on the main thread.
+      var identifiers = Set<String>()
+      for plugin in read {
+        if identifiers.contains(plugin.identifier) {
+          // The alert is shown on the main thread.
+          let identifier = plugin.identifier
+          DispatchQueue.main.async { Utility.showAlert("duplicated_plugin_id", comment: nil, arguments: [identifier]) }
+          plugin.identifier += ".\(UUID().uuidString)"
+          plugin.makeFolders()
+        }
+        identifiers.insert(plugin.identifier)
+      }
+
       DispatchQueue.main.async {
         let orderArray = UserDefaults.standard.array(forKey: "PluginOrder") as? [String] ?? []
         let order = Array(NSOrderedSet(array: orderArray)) as! [String]
         let orderDict = [String: Int](uniqueKeysWithValues: zip(order, 0...order.count))
-        var identifiers = Set<String>()
-
-        for plugin in read {
-          if identifiers.contains(plugin.identifier) {
-            Utility.showAlert("duplicated_plugin_id", comment: nil, arguments: [plugin.identifier])
-            plugin.identifier += ".\(UUID().uuidString)"
-          }
-          identifiers.insert(plugin.identifier)
-        }
-
         let result = read.sorted { orderDict[$0.identifier, default: Int.max] < orderDict[$1.identifier, default: Int.max] }
         savePluginOrder(result)
         completion(result)
@@ -613,6 +614,8 @@ class JavascriptPlugin: NSObject {
 
     super.init()
 
+    makeFolders()
+
     if (enabled) {
       // A plugin is made on `installQueue` when it is installed or updated, while the subtitle providers are registered on the main
       // thread, where they are read.
@@ -761,27 +764,22 @@ class JavascriptPlugin: NSObject {
     return url.appendingPathComponent("\(identifier).plist", isDirectory: false)
   }
 
-  /// The URL of `dataURL`, without the folder being created.
+  /// The plugin's data folder, which `makeFolders` makes.
   var dataFolderURL: URL {
     Utility.pluginsURL.appendingPathComponent(".data", isDirectory: true).appendingPathComponent(identifier, isDirectory: true)
   }
 
-  /// The URL of `tmpURL`, without the folder being created.
+  /// The plugin's temporary folder, which `makeFolders` makes.
   var tmpFolderURL: URL {
     Utility.tempDirURL.appendingPathComponent("iina-\(identifier)", isDirectory: true)
   }
 
-  lazy var dataURL: URL = {
-    let url = dataFolderURL
-    Utility.createDirIfNotExist(url: url)
-    return url
-  }()
-
-  lazy var tmpURL: URL = {
-    let url = tmpFolderURL
-    Utility.createDirIfNotExist(url: url)
-    return url
-  }()
+  /// Make the plugin's data and temporary folders unless they exist. The plugin makes them when it is made, which the app does on
+  /// `installQueue`, so that a script naming a path in them does not make the main thread wait for the file system.
+  func makeFolders() {
+    Utility.createDirIfNotExist(url: dataFolderURL)
+    Utility.createDirIfNotExist(url: tmpFolderURL)
+  }
 
   func localizedPermissions(_ permissions: Set<Permission>? = nil, newLine: String = "\n") -> [(name: String, desc: String, isDangerous: Bool)] {
     let permissions = permissions ?? self.permissions

@@ -88,9 +88,9 @@ class JavascriptAPI: NSObject {
   /// - Returns: `local`: whether the path is inside the plugin's private folder
   func parsePath(_ path: String, forceLocalPath: Bool = true) -> (path: String?, local: Bool) {
     if path.hasPrefix("@tmp/") {
-      return (expandPath(path, byReplacing: "tmp", with: pluginInstance.plugin.tmpURL), true)
+      return (expandPath(path, byReplacing: "tmp", with: pluginInstance.plugin.tmpFolderURL), true)
     } else if path.hasPrefix("@data/") {
-      return (expandPath(path, byReplacing: "data", with: pluginInstance.plugin.dataURL), true)
+      return (expandPath(path, byReplacing: "data", with: pluginInstance.plugin.dataFolderURL), true)
     }
 
     let trackType: MPVTrack.TrackType? =
@@ -123,8 +123,8 @@ class JavascriptAPI: NSObject {
       }
       return (
         absPath,
-        absPath.hasPrefix(pluginInstance.plugin.dataURL.path) ||
-        absPath.hasPrefix(pluginInstance.plugin.tmpURL.path)
+        absPath.hasPrefix(pluginInstance.plugin.dataFolderURL.path) ||
+        absPath.hasPrefix(pluginInstance.plugin.tmpFolderURL.path)
       )
     } ?? (nil, false)
   }
