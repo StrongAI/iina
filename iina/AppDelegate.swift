@@ -268,6 +268,13 @@ class AppDelegate: NSObject, NSApplicationDelegate, SPUUpdaterDelegate {
     // Hide Window > "Enter Full Screen" menu item, because this is already present in the Video menu
     UserDefaults.standard.set(false, forKey: "NSFullScreenMenuItemEverywhere")
 
+    // The plugins folder is read on the plugin install queue, ahead of the default plugins' install below, so that the main thread
+    // does not wait for the file system. The players and global instances, which need the plugins, are made once it is read.
+    JavascriptPlugin.loadPlugins {
+      // A player made before the plugins were read is given its instances of them once they are.
+      PlayerCore.playerCores.filter { $0.plugins.isEmpty }.forEach { $0.loadPlugins() }
+    }
+
     // Install plugins
     if FirstRunManager.isFirstRun(for: .init("installedDefaultPlugins")) {
       Logger.log("Installing default plugins")
@@ -388,28 +395,31 @@ class AppDelegate: NSObject, NSApplicationDelegate, SPUUpdaterDelegate {
     NSApp.isAutomaticCustomizeTouchBarMenuItemEnabled = false
     NSWindow.allowsAutomaticWindowTabbing = false
 
-    JavascriptPlugin.loadGlobalInstances()
+    // The players are made, and what was asked to be opened opened, once the plugins folder has been read.
+    JavascriptPlugin.loadPlugins { [self] in
+      JavascriptPlugin.loadGlobalInstances()
 
-    let mpv = PlayerCore.active.mpv!
-    Logger.log("Configuration when building mpv: \(mpv.getString(MPVProperty.mpvConfiguration)!)", level: .verbose)
+      let mpv = PlayerCore.active.mpv!
+      Logger.log("Configuration when building mpv: \(mpv.getString(MPVProperty.mpvConfiguration)!)", level: .verbose)
 
-    // if have pending open request
-    if let url = pendingURL {
-      parsePendingURL(url)
-    }
+      // if have pending open request
+      if let url = pendingURL {
+        parsePendingURL(url)
+      }
 
-    if !commandLineStatus.isCommandLine {
-      // check whether showing the welcome window after 0.1s
-      Timer.scheduledTimer(timeInterval: TimeInterval(0.1), target: self, selector: #selector(self.checkForShowingInitialWindow), userInfo: nil, repeats: false)
-    } else {
-      openFromCommandLine(commandLineStatus)
+      if !commandLineStatus.isCommandLine {
+        // check whether showing the welcome window after 0.1s
+        Timer.scheduledTimer(timeInterval: TimeInterval(0.1), target: self, selector: #selector(self.checkForShowingInitialWindow), userInfo: nil, repeats: false)
+      } else {
+        openFromCommandLine(commandLineStatus)
+      }
+
+      NSApplication.shared.servicesProvider = self
+
+      AppDelegate.shared.menuController?.updatePluginMenu()
     }
 
     NSRunningApplication.current.activate(options: [.activateIgnoringOtherApps, .activateAllWindows])
-
-    NSApplication.shared.servicesProvider = self
-
-    AppDelegate.shared.menuController?.updatePluginMenu()
 
     MemoryUsage.shared.logUsage("after launching finished")
   }
@@ -819,7 +829,8 @@ class AppDelegate: NSObject, NSApplicationDelegate, SPUUpdaterDelegate {
     }
     let paths = pendingFilesForOpenFile
     pendingFilesForOpenFile.removeAll()
-    openFiles(paths)
+    // The files are opened once the plugins folder has been read, so that their player has its instances of the plugins.
+    JavascriptPlugin.loadPlugins { [self] in openFiles(paths) }
   }
 
   /// Open the files the system asked the app to open, given by their paths, or install the plugin package among them.
@@ -901,7 +912,8 @@ class AppDelegate: NSObject, NSApplicationDelegate, SPUUpdaterDelegate {
     guard let url = event.paramDescriptor(forKeyword: keyDirectObject)?.stringValue else { return }
     Logger.log("URL event: \(url)")
     if isReady {
-      parsePendingURL(url)
+      // The URL is opened once the plugins folder has been read, so that its player has its instances of the plugins.
+      JavascriptPlugin.loadPlugins { [self] in parsePendingURL(url) }
     } else {
       pendingURL = url
     }
@@ -1112,22 +1124,24 @@ class AppDelegate: NSObject, NSApplicationDelegate, SPUUpdaterDelegate {
       player.clearPlugins()
     }
 
-    JavascriptPlugin.recreateAllPlugins()
-    JavascriptPlugin.loadGlobalInstances()
+    // The plugins folder is read off the main thread, and the plugins' instances are made once it is read.
+    JavascriptPlugin.recreateAllPlugins {
+      JavascriptPlugin.loadGlobalInstances()
 
-    for player in PlayerCore.playerCores {
-      for plugin in JavascriptPlugin.plugins {
-        player.reloadPlugin(plugin, forced: true)
-      }
-      // Try to emit the events that are already emitted.
-      // Of course this is not exhaustive, so users shouldn't rely on this function
-      if player.mainWindow.loaded {
-        player.events.emit(.windowLoaded)
-      }
-      player.events.emit(.mpvInitialized)
-      if player.info.state == .playing {
-        player.events.emit(.fileLoaded)
-        player.events.emit(.fileStarted)
+      for player in PlayerCore.playerCores {
+        for plugin in JavascriptPlugin.plugins {
+          player.reloadPlugin(plugin, forced: true)
+        }
+        // Try to emit the events that are already emitted.
+        // Of course this is not exhaustive, so users shouldn't rely on this function
+        if player.mainWindow.loaded {
+          player.events.emit(.windowLoaded)
+        }
+        player.events.emit(.mpvInitialized)
+        if player.info.state == .playing {
+          player.events.emit(.fileLoaded)
+          player.events.emit(.fileStarted)
+        }
       }
     }
   }

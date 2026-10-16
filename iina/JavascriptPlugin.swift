@@ -43,11 +43,19 @@ class JavascriptPlugin: NSObject {
     return plugins.contains { $0.enabled && $0.identifier == "io.iina.ytdl" }
   }
 
-  static var plugins = loadPlugins() {
+  /// The installed plugins, in the order the user put them in, read from the plugins folder by `loadPlugins(then:)` and empty until
+  /// then. Read and set on the main thread.
+  static var plugins: [JavascriptPlugin] = [] {
     didSet {
       NotificationCenter.default.post(Notification(name: .iinaPluginChanged))
     }
   }
+
+  /// Whether the plugins folder has been read into `plugins`.
+  private static var pluginsLoaded = false
+
+  /// The callers to tell on the main thread once the plugins folder being read has been read, `nil` while it is not being read.
+  private static var whenPluginsLoaded: [() -> Void]?
 
   var globalInstance: JavascriptPluginInstance?
 
@@ -158,49 +166,87 @@ class JavascriptPlugin: NSObject {
   }
   let defaultPreferences: [String: Any]
 
-  static func recreateAllPlugins() {
-    plugins = loadPlugins()
+  /// Read the plugins folder into `plugins` unless it has been read, then call `completion` on the main thread once it has been, after
+  /// the completions asked for before it.
+  static func loadPlugins(then completion: @escaping () -> Void) {
+    guard !pluginsLoaded else {
+      DispatchQueue.main.async(execute: completion)
+      return
+    }
+    guard whenPluginsLoaded == nil else {
+      whenPluginsLoaded?.append(completion)
+      return
+    }
+    whenPluginsLoaded = [completion]
+    readPlugins { read in
+      plugins = read
+      pluginsLoaded = true
+      let completions = whenPluginsLoaded ?? []
+      whenPluginsLoaded = nil
+      completions.forEach { $0() }
+    }
   }
 
-  static private func loadPlugins() -> [JavascriptPlugin] {
-    guard IINA_ENABLE_PLUGIN_SYSTEM else { return [] }
+  /// Read the plugins folder again, replacing `plugins` with the plugins read, then call `completion` on the main thread.
+  static func recreateAllPlugins(then completion: @escaping () -> Void) {
+    readPlugins { read in
+      plugins = read
+      pluginsLoaded = true
+      completion()
+    }
+  }
 
-    guard let contents = try?
-      FileManager.default.contentsOfDirectory(at: Utility.pluginsURL,
-                                              includingPropertiesForKeys: [.isDirectoryKey],
-                                              options: [.skipsHiddenFiles, .skipsPackageDescendants])
-    else {
-      Logger.log("Unable to read plugin directory.")
-      return []
+  /// Read the plugins in the plugins folder on `installQueue`, so that the main thread does not wait for the file system, then hand
+  /// them to `completion` on the main thread in the order the user put them in, a plugin whose identifier an earlier one has given a
+  /// new one and the user told.
+  static private func readPlugins(then completion: @escaping ([JavascriptPlugin]) -> Void) {
+    guard IINA_ENABLE_PLUGIN_SYSTEM else {
+      DispatchQueue.main.async { completion([]) }
+      return
     }
 
-    let orderArray = UserDefaults.standard.array(forKey: "PluginOrder") as? [String] ?? []
-    let order = Array(NSOrderedSet(array: orderArray)) as! [String]
-    let orderDict = [String: Int](uniqueKeysWithValues: zip(order, 0...order.count))
-    var identifiers = Set<String>()
-
-    let result = contents
-      .filter {
-        ($0.pathExtension == "iinaplugin" && $0.isExistingDirectory) ||
-          ($0.pathExtension == "iinaplugin-dev")
+    installQueue.async {
+      guard let contents = try?
+        FileManager.default.contentsOfDirectory(at: Utility.pluginsURL,
+                                                includingPropertiesForKeys: [.isDirectoryKey],
+                                                options: [.skipsHiddenFiles, .skipsPackageDescendants])
+      else {
+        Logger.log("Unable to read plugin directory.")
+        DispatchQueue.main.async { completion([]) }
+        return
       }
-      .compactMap { path_ -> JavascriptPlugin? in
-        let isDev = path_.pathExtension == "iinaplugin-dev"
-        let path = isDev ? path_.resolvingSymlinksInPath() : path_
-        if let plugin = JavascriptPlugin(filename: path.lastPathComponent, externalURL: isDev ? path : nil) {
+
+      let read = contents
+        .filter {
+          ($0.pathExtension == "iinaplugin" && $0.isExistingDirectory) ||
+            ($0.pathExtension == "iinaplugin-dev")
+        }
+        .compactMap { path_ -> JavascriptPlugin? in
+          let isDev = path_.pathExtension == "iinaplugin-dev"
+          let path = isDev ? path_.resolvingSymlinksInPath() : path_
+          return JavascriptPlugin(filename: path.lastPathComponent, externalURL: isDev ? path : nil)
+        }
+
+      // The alert is shown on the main thread.
+      DispatchQueue.main.async {
+        let orderArray = UserDefaults.standard.array(forKey: "PluginOrder") as? [String] ?? []
+        let order = Array(NSOrderedSet(array: orderArray)) as! [String]
+        let orderDict = [String: Int](uniqueKeysWithValues: zip(order, 0...order.count))
+        var identifiers = Set<String>()
+
+        for plugin in read {
           if identifiers.contains(plugin.identifier) {
             Utility.showAlert("duplicated_plugin_id", comment: nil, arguments: [plugin.identifier])
             plugin.identifier += ".\(UUID().uuidString)"
           }
           identifiers.insert(plugin.identifier)
-          return plugin
         }
-        return nil
-      }
-      .sorted { orderDict[$0.identifier, default: Int.max] < orderDict[$1.identifier, default: Int.max] }
 
-    savePluginOrder(result)
-    return result
+        let result = read.sorted { orderDict[$0.identifier, default: Int.max] < orderDict[$1.identifier, default: Int.max] }
+        savePluginOrder(result)
+        completion(result)
+      }
+    }
   }
 
   static func loadGlobalInstances() {
