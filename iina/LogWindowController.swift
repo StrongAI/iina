@@ -397,12 +397,27 @@ class LogWindowController: NSWindowController, NSMenuDelegate, NSToolbarDelegate
     let filename = saveAll ? "iina.log" : (window?.subtitle ?? "filtered") + " iina.log"
     Utility.quickSavePanel(title: "Log", filename: filename, sheetWindow: window) { url in
       let content: Any? = saveAll ? self.arrayController.content : self.arrayController.arrangedObjects
-      let logs = (content as! [Logger.Log]).map { $0.logString }.joined()
-      do {
-        try logs.write(to: url, atomically: true, encoding: .utf8)
-      } catch let error {
+      LogWindowController.write(content as! [Logger.Log], to: url) { error in
+        guard let error else { return }
         Utility.showAlert("error_saving_file", arguments: [NSLocalizedString("logwindow.logs", comment: "logs"), error.localizedDescription])
       }
+    }
+  }
+
+  /// The queue saved logs are joined and written on, so that the main thread does not wait for the joining or the file system.
+  static let saveQueue = DispatchQueue(label: "IINALogSave", qos: .userInitiated)
+
+  /// Join `logs` and write them to `url` on `saveQueue`, then call `completion` on the main thread with the error writing them, if any.
+  static func write(_ logs: [Logger.Log], to url: URL, then completion: @escaping (Error?) -> Void) {
+    saveQueue.async {
+      let text = logs.map { $0.logString }.joined()
+      var failure: Error?
+      do {
+        try text.write(to: url, atomically: true, encoding: .utf8)
+      } catch let error {
+        failure = error
+      }
+      DispatchQueue.main.async { completion(failure) }
     }
   }
 
