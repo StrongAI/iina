@@ -1263,41 +1263,49 @@ class PlayerCore: NSObject {
     return FFmpegController.createNSImage(withContentsOf: url)
   }
 
+  /// The queue a screenshot mpv has taken is found, read, decoded and removed on, so that the main thread does not wait for the file
+  /// system.
+  static let screenshotQueue = DispatchQueue(label: "IINAScreenshot", qos: .userInitiated)
+
   func screenshotCallback() {
     let saveToFile = Preference.bool(for: .screenshotSaveToFile)
     let saveToClipboard = Preference.bool(for: .screenshotCopyToClipboard)
     guard saveToFile || saveToClipboard else { return }
     log("Screenshot done: saveToFile=\(saveToFile), saveToClipboard=\(saveToClipboard)", level: .verbose)
 
-    guard let imageFolder = mpv.getString(MPVOption.Screenshot.screenshotDir) else { return }
-    guard let lastScreenshotURL = Utility.getLatestScreenshot(from: imageFolder) else { return }
-    guard let image = createImage(lastScreenshotURL) else {
-      self.sendOSD(.screenshot)
-      if !saveToFile {
-        try? FileManager.default.removeItem(at: lastScreenshotURL)
-      }
-      return
-    }
-    if saveToClipboard {
-      NSPasteboard.general.clearContents()
-      NSPasteboard.general.writeObjects([image])
-    }
-    guard Preference.bool(for: .screenshotShowPreview) else {
-      self.sendOSD(.screenshot)
-      if !saveToFile {
-        try? FileManager.default.removeItem(at: lastScreenshotURL)
-      }
-      return
-    }
-
-    DispatchQueue.main.async {
-      let osdView = ScreenshootOSDView()
-      osdView.setImage(image,
-                       size: image.size.shrink(toSize: NSSize(width: 300, height: 200)),
-                       fileURL: saveToFile ? lastScreenshotURL : nil)
-      self.sendOSD(.screenshot, forcedTimeout: 5, accessoryView: osdView.view, context: osdView)
-      if !saveToFile {
-        try? FileManager.default.removeItem(at: lastScreenshotURL)
+    // The screenshot folder is read from mpv without waiting, and the screenshot is found, read and decoded on the screenshot queue,
+    // while the clipboard and the OSD are changed on the main thread.
+    mpv.getStringsAsync([MPVOption.Screenshot.screenshotDir]) { [self] values in
+      guard let imageFolder = values.first ?? nil else { return }
+      PlayerCore.screenshotQueue.async { [self] in
+        guard let lastScreenshotURL = Utility.getLatestScreenshot(from: imageFolder) else { return }
+        let image = createImage(lastScreenshotURL)
+        let removeScreenshot = {
+          guard !saveToFile else { return }
+          PlayerCore.screenshotQueue.async { try? FileManager.default.removeItem(at: lastScreenshotURL) }
+        }
+        DispatchQueue.main.async { [self] in
+          guard let image else {
+            sendOSD(.screenshot)
+            removeScreenshot()
+            return
+          }
+          if saveToClipboard {
+            NSPasteboard.general.clearContents()
+            NSPasteboard.general.writeObjects([image])
+          }
+          guard Preference.bool(for: .screenshotShowPreview) else {
+            sendOSD(.screenshot)
+            removeScreenshot()
+            return
+          }
+          let osdView = ScreenshootOSDView()
+          osdView.setImage(image,
+                           size: image.size.shrink(toSize: NSSize(width: 300, height: 200)),
+                           fileURL: saveToFile ? lastScreenshotURL : nil)
+          sendOSD(.screenshot, forcedTimeout: 5, accessoryView: osdView.view, context: osdView)
+          removeScreenshot()
+        }
       }
     }
   }
