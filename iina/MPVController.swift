@@ -220,7 +220,8 @@ class MPVController: NSObject {
     MPVProperty.videoParamsPrimaries: MPV_FORMAT_STRING,
     MPVProperty.videoParamsGamma: MPV_FORMAT_STRING,
     MPVProperty.idleActive: MPV_FORMAT_FLAG,
-    MPVProperty.currentAo: MPV_FORMAT_STRING
+    MPVProperty.currentAo: MPV_FORMAT_STRING,
+    MPVOption.WatchLater.savePositionOnQuit: MPV_FORMAT_FLAG
   ]
 
   /// Map from mpv codec name to core media video codec types.
@@ -837,9 +838,9 @@ class MPVController: NSObject {
     // Remove observers for mpv properties. Because 0 was passed for reply_userdata when
     // registering mpv property observers all observers can be removed in one call.
     mpv_unobserve_property(mpv, 0)
-    // Start mpv quitting. Even though this command is being sent using the synchronous
-    // command API the quit command is special and will be executed by mpv asynchronously.
-    command(.quit, level: .verbose)
+    // Start mpv quitting without waiting for mpv. mpv handles the quit after the requests made before it, and reports that it has
+    // shut down with MPV_EVENT_SHUTDOWN.
+    asyncCommand(.quit, replyUserdata: 0, level: .verbose)
   }
 
   // MARK: - Command & property
@@ -1903,6 +1904,11 @@ class MPVController: NSObject {
       let currentAo = property.format == MPV_FORMAT_STRING
         ? property.data.map { String(cString: $0.assumingMemoryBound(to: UnsafePointer<UInt8>.self).pointee) } : nil
       DispatchQueue.main.async { self.player.currentAoChanged(currentAo) }
+
+    case MPVOption.WatchLater.savePositionOnQuit:
+      // Whether mpv saves the playback position on quit, false when it reports no value, as a read of the property would give.
+      let savesPosition = UnsafePointer<Bool>(OpaquePointer(property.data))?.pointee ?? false
+      DispatchQueue.main.async { self.player.info.savesPositionOnQuit = savesPosition }
 
     default:
       // Utility.log("MPV property changed (unhandled): \(name)")

@@ -599,8 +599,9 @@ class AppDelegate: NSObject, NSApplicationDelegate, SPUUpdaterDelegate {
     // shutdown and it may be possible to proceed with termination.
     if canTerminateNow {
       Logger.log("Proceeding with application termination")
-      // Tell Cocoa that it is ok to immediately proceed with termination.
-      return .terminateNow
+      // Tell Cocoa to proceed with termination once the log file is closed.
+      replyToTerminateOnceLogClosed()
+      return .terminateLater
     }
 
     // To ensure termination completes and the user is not required to force quit IINA, impose an
@@ -636,7 +637,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, SPUUpdaterDelegate {
       }
       Logger.log("Proceeding with application termination due to time out", level: .warning)
       // Tell Cocoa to proceed with termination.
-      NSApp.reply(toApplicationShouldTerminate: true)
+      replyToTerminateOnceLogClosed()
     }
 
     RunLoop.main.add(timer, forMode: .common)
@@ -701,7 +702,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, SPUUpdaterDelegate {
         }
       }
       // Tell AppKit to proceed with termination.
-      NSApp.reply(toApplicationShouldTerminate: true)
+      replyToTerminateOnceLogClosed()
     }
 
     // Establish an observer for a player core shutting down.
@@ -781,8 +782,16 @@ class AppDelegate: NSObject, NSApplicationDelegate, SPUUpdaterDelegate {
   }
 
   func applicationWillTerminate(_ notification: Notification) {
-    Logger.log("App will terminate")
+    // The log file is closed before AppKit is told to proceed with termination, see replyToTerminateOnceLogClosed, so this closes
+    // it only when termination did not ask applicationShouldTerminate.
     Logger.closeLogFile()
+  }
+
+  /// Log that the app will terminate and close the log file, then tell AppKit to proceed with termination once every line logged
+  /// before has been written and the file is closed, so that the last lines reach the file without the main thread waiting for it.
+  private func replyToTerminateOnceLogClosed() {
+    Logger.log("App will terminate")
+    Logger.closeLogFile { NSApp.reply(toApplicationShouldTerminate: true) }
   }
 
   /**

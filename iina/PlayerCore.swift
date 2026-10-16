@@ -213,7 +213,7 @@ class PlayerCore: NSObject {
     case ticketExpired
   }
 
-  private var backgroundTaskInUse = false
+  private(set) var backgroundTaskInUse = false
 
   /// The URLs of each open finding its files on the queue for opening files, in the order the opens were asked. The player stays
   /// idle until they open the files, and is not handed out as an idle player in the meantime. Read and written on the main thread.
@@ -762,9 +762,8 @@ class PlayerCore: NSObject {
   ///
   /// This method is intended to only be used during application termination. Once shutdown has been initiated player methods
   /// **must not** be called.
-  /// - Important: As a part of shutting down the player this method sends a quit command to mpv. Even though the command is
-  ///     sent to mpv using the synchronous API mpv executes the quit command asynchronously. The player is not fully shutdown
-  ///     until mpv finishes executing the quit command and shuts down.
+  /// - Important: As a part of shutting down the player this method sends a quit command to mpv, without waiting for mpv. The
+  ///     player is not fully shutdown until mpv finishes executing the quit command and shuts down.
   /// - Note: If the user clicks on `Quit` right after starting to play a video then the background task may still be running and
   ///     loading files into the playlist and adding subtitles. If that is the case then the background task **must be** stopped before
   ///     sending a `quit` command to mpv. If the background task is allowed to access mpv after a `quit` command has been
@@ -801,6 +800,9 @@ class PlayerCore: NSObject {
   ///     windows of vulnerability that can not be fully closed. IINA has no choice but to support a mpv initiated shutdown as best it
   ///     can.
   func mpvHasShutdown() {
+    // mpv reports that it has shut down again while another client of its core, such as a script, is still open. The player has
+    // handled the shutdown already, and its mpv handle may already be destroyed.
+    guard info.state != .shutDown else { return }
     let isMPVInitiated = info.state != .shuttingDown
     let suffix = isMPVInitiated ? " (initiated by mpv)" : ""
     log("Player has shutdown\(suffix)")
@@ -812,7 +814,12 @@ class PlayerCore: NSObject {
         stopBackgroundTask()
       }
       mpv.removeObservers()
-      savePlayerState()
+      // The events of mpv are no longer read once it has shut down, so an answer to a request would never arrive. Whether mpv saves
+      // the playback position on quit is the value it last reported.
+      if info.savesPositionOnQuit {
+        storePlaybackPosition(info.currentURL, duration: info.videoDuration?.second, position: info.videoPosition?.second)
+      }
+      refreshSyncUITimer()
     }
     uninitVideo()
     postNotification(.iinaPlayerShutdown)
@@ -821,10 +828,14 @@ class PlayerCore: NSObject {
       // however the main dispatch queue must not be used to avoid blocking the queue as per
       // instructions from Apple.
       RunLoop.main.perform(inModes: [.common]) {
-        NSApp.terminate(nil)
+        Self.terminateApp()
       }
     }
   }
+
+  /// Asks AppKit to terminate the app once `mpv` has shut down on its own. A test replaces it, so that the app hosting the tests is
+  /// not terminated.
+  static var terminateApp: () -> Void = { NSApp.terminate(nil) }
 
   /// Switch the current player to mini player from the main window.
   ///
@@ -2193,18 +2204,23 @@ class PlayerCore: NSObject {
       // On main because PlaybackInfo is confined to the main thread, see MPVController.queue.
       DispatchQueue.main.async { [self] in
         if savesPosition == true {
-          if let url {
-            Preference.set(url, for: .iinaLastPlayedFilePath)
-            // Write to cache directly (rather than calling `refreshCachedVideoProgress`).
-            // If user only closed the window but didn't quit the app, this can make sure playlist displays the correct progress.
-            info.setCachedVideoDurationAndProgress(url.path, (duration: duration, progress: position))
-          }
-          if let position {
-            Preference.set(position, for: .iinaLastPlayedFilePosition)
-          }
+          storePlaybackPosition(url, duration: duration, position: position)
         }
         completion?(savesPosition == true)
       }
+    }
+  }
+
+  /// Store `url`, played for `duration` up to `position`, as the last played file and its position.
+  private func storePlaybackPosition(_ url: URL?, duration: Double?, position: Double?) {
+    if let url {
+      Preference.set(url, for: .iinaLastPlayedFilePath)
+      // Write to cache directly (rather than calling `refreshCachedVideoProgress`).
+      // If user only closed the window but didn't quit the app, this can make sure playlist displays the correct progress.
+      info.setCachedVideoDurationAndProgress(url.path, (duration: duration, progress: position))
+    }
+    if let position {
+      Preference.set(position, for: .iinaLastPlayedFilePosition)
     }
   }
 

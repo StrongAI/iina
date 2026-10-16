@@ -235,6 +235,9 @@ class PlaybackInfo {
   var audioDeviceList: [[String: String]] = []
   var audioDevice: String?
 
+  /// The value of mpv's `save-position-on-quit` option, as mpv last reported it.
+  var savesPositionOnQuit = false
+
   /** Selected track IDs. Use these (instead of `isSelected` of a track) to check if selected */
   @Atomic var aid: Int?
   @Atomic var sid: Int?

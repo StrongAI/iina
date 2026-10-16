@@ -141,7 +141,8 @@ class PluginManager {
       }
     }
     // check whether a duplicate plugin exists, if yes, replace
-    if let pos = JavascriptPlugin.plugins.firstIndex(where: { $0.identifier == plugin.identifier }) {
+    let pos = JavascriptPlugin.plugins.firstIndex(where: { $0.identifier == plugin.identifier })
+    if let pos {
       guard await Dialogs.ask("plugin_reinstall", titleArgs: [plugin.name]).show(in: window) else {
         plugin.remove()
         return .cancelled
@@ -150,17 +151,17 @@ class PluginManager {
       let oldPlugin = JavascriptPlugin.plugins[pos]
       oldPlugin.enabled = false
       oldPlugin.remove()
-      // install the new plugin
-      plugin.normalizePath()
-      JavascriptPlugin.plugins.insert(plugin, at: pos)
-      plugin.enabled = true
-      return .reinstalled
-    } else {
-      plugin.normalizePath()
-      JavascriptPlugin.plugins.append(plugin)
-      plugin.enabled = true
-      return .installed
     }
+    // The plugin is moved into the plugins folder on the install queue, after the files of the old plugin are removed there, so
+    // that the main thread does not wait for the file system.
+    _ = try? await JavascriptPlugin.onInstallQueue { plugin.normalizePath() }
+    if let pos {
+      JavascriptPlugin.plugins.insert(plugin, at: pos)
+    } else {
+      JavascriptPlugin.plugins.append(plugin)
+    }
+    plugin.enabled = true
+    return pos == nil ? .installed : .reinstalled
   }
 
   @MainActor

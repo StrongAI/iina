@@ -182,16 +182,21 @@ class Logger: NSObject {
   /// system and the file is not written once it is closed.
   static let fileQueue = DispatchQueue(label: "IINALoggerFile", qos: .utility)
 
-  /// Closes the log file, if logging is enabled,
+  /// Closes the log file, if logging is enabled, then calls `completion` on the main thread.
   /// - Important: Currently IINA does not coordinate threads during termination. This results in a race condition as to whether
   ///     a thread will attempt to log a message after the log file has been closed or not.  Previously this was triggering crashes due
   ///     to writing to a closed file handle. The logger now closes the log file on its file queue, after the writes asked before the
   ///     close. If a log message is logged after the log file is closed it will only be logged to the console.
-  static func closeLogFile() {
-    guard enabled else { return }
+  /// - Parameter completion: Called once every line logged before the close has been written and the file is closed.
+  static func closeLogFile(completion: (() -> Void)? = nil) {
+    guard enabled else {
+      completion.map { DispatchQueue.main.async(execute: $0) }
+      return
+    }
     // The file is closed on the file queue, after any write in progress, so that the caller does not wait for the write or for the
     // file to be flushed.
     fileQueue.async {
+      defer { completion.map { DispatchQueue.main.async(execute: $0) } }
       guard let fileHandle = logFileHandle else { return }
       do {
         // The deprecated method is used instead of the new close method that throws swift exceptions

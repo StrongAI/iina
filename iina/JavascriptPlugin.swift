@@ -54,15 +54,34 @@ class JavascriptPlugin: NSObject {
   @objc var enabled: Bool {
     didSet {
       UserDefaults.standard.set(enabled, forKey: "PluginEnabled." + identifier)
-      if enabled {
-        registerSubProviders()
-      } else {
+      guard enabled else {
         removeSubProviders()
+        reloadInstances()
+        return
       }
-      reloadGlobalInstance()
-      PlayerCore.reloadPluginForAll(self)
-      NotificationCenter.default.post(Notification(name: .iinaPluginChanged))
+      registerSubProviders()
+      // The instances of the plugin read its entry scripts, which are read on the install queue first, so that the main thread does
+      // not wait for the file system. The instances are made on the main thread once they are read, unless the plugin has been
+      // disabled meanwhile.
+      let urls = [entryURL, globalEntryURL].compactMap { $0 }
+      JavascriptPlugin.installQueue.async { [self] in
+        let scripts = urls.reduce(into: [URL: String]()) { $0[$1] = try? String(contentsOf: $1) }
+        DispatchQueue.main.async { [self] in
+          guard enabled else { return }
+          entryScripts = scripts
+          reloadInstances()
+          // Instances made from here on read their entry scripts from the files.
+          entryScripts = [:]
+        }
+      }
     }
+  }
+
+  /// Make or release the instances of the plugin, globally and in every player, as `enabled` asks, and tell the windows.
+  private func reloadInstances() {
+    reloadGlobalInstance()
+    PlayerCore.reloadPluginForAll(self)
+    NotificationCenter.default.post(Notification(name: .iinaPluginChanged))
   }
 
   let name: String
@@ -541,7 +560,10 @@ class JavascriptPlugin: NSObject {
     if let pos {
       JavascriptPlugin.plugins.remove(at: pos)
     }
-    try? FileManager.default.removeItem(at: root)
+    // The files are removed on the install queue, so that the main thread does not wait for the file system, and before any plugin
+    // is moved into the plugins folder after this.
+    let root = root
+    JavascriptPlugin.installQueue.async { try? FileManager.default.removeItem(at: root) }
     return pos
   }
 
