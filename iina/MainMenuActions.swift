@@ -36,13 +36,27 @@ class MainMenuActionHandler: NSResponder, NSMenuItemValidation {
             playlist.append((item.filename + "\n"))
           }
         }
-        do {
-          try playlist.write(to: url, atomically: true, encoding: String.Encoding.utf8)
-        } catch let error as NSError {
-          Utility.showAlert("error_saving_file", arguments: ["subtitle",
-                                                            error.localizedDescription])
+        MainMenuActionHandler.write(playlist, to: url) { error in
+          guard let error else { return }
+          Utility.showAlert("error_saving_file", arguments: ["subtitle", error.localizedDescription])
         }
       }
+    }
+  }
+
+  /// The queue saved playlists and downloaded subtitles are written on, so that the main thread does not wait for the file system.
+  static let saveQueue = DispatchQueue(label: "IINAMenuSave", qos: .userInitiated)
+
+  /// Write `playlist` to `url` on `saveQueue`, then call `completion` on the main thread with the error writing it, if any.
+  static func write(_ playlist: String, to url: URL, then completion: @escaping (Error?) -> Void) {
+    saveQueue.async {
+      var failure: Error?
+      do {
+        try playlist.write(to: url, atomically: true, encoding: String.Encoding.utf8)
+      } catch let error {
+        failure = error
+      }
+      DispatchQueue.main.async { completion(failure) }
     }
   }
 
@@ -451,10 +465,27 @@ extension MainMenuActionHandler {
       Utility.showAlert("sub.no_selected")
       return
     }
-    let subURL = URL(fileURLWithPath: path)
+    // The URL is made as a file's, so that making it does not read the file system.
+    let subURL = URL(fileURLWithPath: path, isDirectory: false)
     let subFileName = subURL.lastPathComponent
     let windowTitle = NSLocalizedString("alert.sub.save_downloaded.title", comment: "Save Downloaded Subtitle")
     Utility.quickSavePanel(title: windowTitle, filename: subFileName, sheetWindow: player.currentWindow) { (destURL) in
+      MainMenuActionHandler.copySubtitle(subURL, to: destURL) { error in
+        if let error {
+          Utility.showAlert("error_saving_file", arguments: ["subtitle", error.localizedDescription])
+          return
+        }
+        self.player.sendOSD(.savedSub)
+      }
+    }
+  }
+
+  /// Copy the downloaded subtitle at `subURL` to `destURL` on `saveQueue`, moving a file already at `destURL` to the Trash first, so
+  /// that the main thread does not wait for the file system, then call `completion` on the main thread with the error copying it, if
+  /// any.
+  static func copySubtitle(_ subURL: URL, to destURL: URL, then completion: @escaping (Error?) -> Void) {
+    saveQueue.async {
+      var failure: Error?
       do {
         // The Save panel checks to see if a file already exists and if so asks if it should be
         // replaced. The quickSavePanel would not have called this code if the user canceled, so if
@@ -470,10 +501,10 @@ extension MainMenuActionHandler {
           }
           try FileManager.default.copyItem(at: subURL, to: destURL)
           Logger.log("Saved downloaded subtitle to \(destURL.path)")
-          self.player.sendOSD(.savedSub)
-      } catch let error as NSError {
-        Utility.showAlert("error_saving_file", arguments: ["subtitle", error.localizedDescription])
+      } catch let error {
+        failure = error
       }
+      DispatchQueue.main.async { completion(failure) }
     }
   }
 
