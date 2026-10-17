@@ -786,12 +786,13 @@ class MPVController: NSObject {
     CGLUnlockContext(openGLContext)
   }
 
-  func mpvUninitRendering() {
+  func mpvUninitRendering(destroying handle: OpaquePointer?) {
     guard let mpvRenderContext else { return }
     mpv_render_context_set_update_callback(mpvRenderContext, nil, nil)
     mpv_render_context_free(mpvRenderContext)
     self.mpvRenderContext = nil
-    mpvDestroy()
+    guard let handle else { return }
+    queue.async { mpv_destroy(handle) }
   }
 
   /// Destroy the mpv handle without the calling thread waiting for `mpv` to finish with it.

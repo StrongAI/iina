@@ -68,7 +68,8 @@ class ViewLayer: CAOpenGLLayer {
 
   private weak var videoView: VideoView!
 
-  private let mpvGLQueue = DispatchQueue(label: "com.colliderli.iina.mpvgl", qos: .userInteractive)
+  /// The serial queue the layer draws frames on. `VideoView.uninit()` frees mpv's renderer on it, after any frame being drawn there.
+  let mpvGLQueue = DispatchQueue(label: "com.colliderli.iina.mpvgl", qos: .userInteractive)
 
   private var bufferDepth: GLint = 8
 

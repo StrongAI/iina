@@ -82,23 +82,41 @@ class VideoView: NSView {
 
   /// Uninitialize this view.
   ///
-  /// This method will stop drawing and free the mpv render context. This is done before sending a quit command to mpv.
+  /// This method will stop drawing, free the mpv render context and destroy the player's mpv handle. The handle is cleared on the
+  /// calling thread, so that no request made after this uses it, and the rest is done on the queue the layer draws on, so that the
+  /// main thread waits neither for a frame holding the OpenGL context, nor for a display link callback in progress, nor for mpv to
+  /// tear its video output down.
   /// - Important: Once mpv has been instructed to quit accessing the mpv core can result in a crash, therefore locks must be
   ///     used to coordinate uninitializing the view so that other threads do not attempt to use the mpv core while it is shutting down.
   func uninit() {
+    let handle = takeHandle()
+    videoLayer.mpvGLQueue.async { [self] in uninit(destroying: handle) }
+  }
+
+  deinit {
+    // The display link's callback is given the view unretained, so a view freed before it was uninitialized stops it at once.
+    uninit(destroying: takeHandle())
+  }
+
+  /// Clears the player's mpv handle, once the view has a renderer to free with it, and returns the handle.
+  private func takeHandle() -> OpaquePointer? {
+    let mpv: MPVController = player.mpv
+    guard mpv.mpvRenderContext != nil, let handle = mpv.mpv else { return nil }
+    mpv.mpv = nil
+    return handle
+  }
+
+  /// Stops the display link, then frees mpv's renderer and destroys `handle`. The display link is stopped before `isUninited` is
+  /// locked for writing, since stopping it waits for a callback in progress and the callback waits to read `isUninited`.
+  private func uninit(destroying handle: OpaquePointer?) {
+    stopDisplayLink()
     player.mpv.lockAndSetOpenGLContext()
     defer { player.mpv.unlockOpenGLContext() }
     $isUninited.withWriteLock() { isUninited in
       guard !isUninited else { return }
       isUninited = true
-
-      stopDisplayLink()
-      player.mpv.mpvUninitRendering()
+      player.mpv.mpvUninitRendering(destroying: handle)
     }
-  }
-
-  deinit {
-    uninit()
   }
 
   override func draw(_ dirtyRect: NSRect) {
