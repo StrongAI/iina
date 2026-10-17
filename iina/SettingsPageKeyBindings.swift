@@ -86,43 +86,23 @@ class ConfigEditor: SettingsAccessory.Base {
 
   var mappingController: NSArrayController
 
-  static let defaultConfigMap: KeyValuePairs<String, String> = [
-    "IINA Default": "iina-default-input",
-    "mpv Default": "input",
-    "VLC Default": "vlc-default-input",
-    "Movist Default": "movist-default-input",
-    "Movist v2 Default": "movist-v2-default-input",
-  ]
-
   let fallbackDefault = "IINA Default"
 
-  static var defaultConfigs: [String: String] = {
-    var configs: [String: String] = [:]
-    for (key, value) in defaultConfigMap {
-      configs[key] = Bundle.main.path(forResource: value, ofType: "conf", inDirectory: "config")!
-    }
-    return configs
-  }()
-
-  static var userConfigs: [String: String] {
-    do {
-      let files = try FileManager.default.contentsOfDirectory(at: Utility.userInputConfDirURL, includingPropertiesForKeys: nil)
-      let configFiles = files.filter { $0.pathExtension == "conf" }
-      return Dictionary(uniqueKeysWithValues: configFiles.map { ($0.deletingPathExtension().lastPathComponent, $0.path) })
-    } catch {
-      Logger.fatal("Cannot get user config file!")
-    }
-  }
+  /// The configs the editor last listed, with `PrefKeyBindingViewController.listConfigs` off the main thread. The built-in configs'
+  /// files are looked up there too, the editor using the same lookups as the old preferences page.
+  private(set) var configs = PrefKeyBindingViewController.InputConfigs()
 
   var configNames: [String] {
-    return KC.defaultConfigMap.map { $0.key } + Array(KC.userConfigs.keys).sorted()
+    return configs.names
   }
 
-  let configNameValidator: Utility.InputValidator<String> = { input in
+  /// Checks a new config's name against the built-in configs and the user's configs the editor last listed, so that it does not list
+  /// them on the main thread. Where the new config's file is made, a file of its name is looked for again.
+  lazy var configNameValidator: Utility.InputValidator<String> = { [unowned self] input in
     if input.isEmpty {
       return .valueIsEmpty
     }
-    if KC.userConfigs[input] != nil || KC.defaultConfigs[input] != nil {
+    if KC.isDefaultConfig(input) || configs.users[input] != nil {
       return .valueAlreadyExists
     }
     return .ok
@@ -234,29 +214,38 @@ class ConfigEditor: SettingsAccessory.Base {
       loadConfigFile(fallbackDefault)
     }
 
-    guard let configName, let confFilePath = getFilePath(forConfig: configName, showAlert: false) else {
+    guard let configName else {
       fallback()
       return
     }
 
-    populateChooser(select: configName)
-    currentConfName = configName
-    currentConfFilePath = confFilePath
+    // The configs are listed, and the config read, off the main thread.
+    KC.readConfig(named: configName) { [self] configs, confFilePath, mapping in
+      self.configs = configs
+      guard let confFilePath else {
+        fallback()
+        return
+      }
 
-    guard let mapping = KeyMapping.parseInputConf(at: currentConfFilePath) else { fallback(); return }
+      populateChooser(select: configName)
+      currentConfName = configName
+      currentConfFilePath = confFilePath
 
-    mappingController.content = nil
-    mappingController.add(contentsOf: mapping)
-    mappingController.setSelectionIndexes(IndexSet())
+      guard let mapping else { fallback(); return }
 
-    changeButtonEnabledStatus()
+      mappingController.content = nil
+      mappingController.add(contentsOf: mapping)
+      mappingController.setSelectionIndexes(IndexSet())
 
-    if !initialSetup {
-      Preference.set(currentConfName, for: .currentInputConfigName)
-      setKeybindingsForPlayerCore()
+      changeButtonEnabledStatus()
+
+      if !initialSetup {
+        Preference.set(currentConfName, for: .currentInputConfigName)
+        setKeybindingsForPlayerCore()
+      }
+
+      isLoadingConfig = false
     }
-
-    isLoadingConfig = false
   }
 
   private func populateChooser(select currentConfName: String? = nil) {
@@ -264,7 +253,7 @@ class ConfigEditor: SettingsAccessory.Base {
 
     menu.removeAllItems()
     for name in configNames {
-      let isDefaultConfig = KC.defaultConfigs[name] != nil
+      let isDefaultConfig = KC.isDefaultConfig(name)
       menu.addItem(withTitle: name, image: isDefaultConfig ? ["lock"] : nil,
                    action: #selector(configSelected), target: self, obj: name)
     }
@@ -274,7 +263,10 @@ class ConfigEditor: SettingsAccessory.Base {
     }
   }
 
+  /// Set the editor's key mappings as the key bindings, then write them to the current config's file off the main thread.
   func saveToConfFile(_ sender: Notification) {
+    // An editor whose config has not been read yet has no key mappings to save.
+    guard let currentConfFilePath else { return }
     let predicate = mappingController.filterPredicate
     mappingController.filterPredicate = nil
     let keyMappings = mappingController.arrangedObjects as! [KeyMapping]
@@ -283,10 +275,11 @@ class ConfigEditor: SettingsAccessory.Base {
     }
     setKeybindingsForPlayerCore()
     mappingController.filterPredicate = predicate
-    do {
-      try KeyMapping.generateInputConf(from: keyMappings).write(toFile: currentConfFilePath, atomically: true, encoding: .utf8)
-    } catch {
-      Utility.showAlert("config.cannot_write", sheetWindow: view.window)
+    let inputConf = KeyMapping.generateInputConf(from: keyMappings)
+    KC.changeConfigFiles({ try inputConf.write(toFile: currentConfFilePath, atomically: true, encoding: .utf8) }) { [self] error in
+      if error != nil {
+        Utility.showAlert("config.cannot_write", sheetWindow: view.window)
+      }
     }
   }
 
@@ -320,42 +313,65 @@ class ConfigEditor: SettingsAccessory.Base {
   @objc func newConfFileAction(_ sender: AnyObject) {
     Utility.quickPromptPanel("config.new", validator: configNameValidator, sheetWindow: addConfBtn.window) { newName in
       self.newConfigFilePath(forName: newName) { newFilePath in
-        if !FileManager.default.createFile(atPath: newFilePath, contents: nil, attributes: nil) {
-          Utility.showAlert("config.cannot_create", sheetWindow: self.addConfBtn.window)
-          return
-        }
-        self.loadConfigFile(newName)
+        self.createConfig(named: newName, at: newFilePath)
       }
+    }
+  }
+
+  /// Make an empty config file at `path` off the main thread, then load it as the config named `name`.
+  func createConfig(named name: String, at path: String) {
+    KC.changeConfigFiles({
+      guard FileManager.default.createFile(atPath: path, contents: nil, attributes: nil) else {
+        throw CocoaError(.fileWriteUnknown)
+      }
+    }) { [self] error in
+      guard error == nil else {
+        Utility.showAlert("config.cannot_create", sheetWindow: addConfBtn.window)
+        return
+      }
+      loadConfigFile(name)
     }
   }
 
   @objc func duplicateConfFileAction(_ sender: AnyObject) {
     Utility.quickPromptPanel("config.duplicate", validator: configNameValidator, sheetWindow: addConfBtn.window) { newName in
       self.newConfigFilePath(forName: newName) { newFilePath in
-        do {
-          try FileManager.default.copyItem(atPath: self.currentConfFilePath!, toPath: newFilePath)
-        } catch let error {
-          Utility.showAlert("config.cannot_create", arguments: [error.localizedDescription], sheetWindow: self.view.window)
-          return
-        }
-        self.loadConfigFile(newName)
+        self.duplicateConfig(named: newName, at: newFilePath)
       }
+    }
+  }
+
+  /// Copy the current config's file to `path` off the main thread, then load the copy as the config named `name`.
+  func duplicateConfig(named name: String, at path: String) {
+    let currentPath = currentConfFilePath!
+    KC.changeConfigFiles({ try FileManager.default.copyItem(atPath: currentPath, toPath: path) }) { [self] error in
+      if let error {
+        Utility.showAlert("config.cannot_create", arguments: [error.localizedDescription], sheetWindow: view.window)
+        return
+      }
+      loadConfigFile(name)
     }
   }
 
   @objc func importConfigAction(_ sender: Any) {
     Utility.quickOpenPanel(title: "Select Config File to Import", chooseDir: false, sheetWindow: view.window, allowedFileTypes: ["conf"]) { url in
       guard url.isFileURL, url.lastPathComponent.hasSuffix(".conf") else { return }
+      self.importConfig(from: url)
+    }
+  }
+
+  /// Copy the config file at `url` into the user's input config folder off the main thread, then load the copy.
+  func importConfig(from url: URL) {
+    let newName = url.deletingPathExtension().lastPathComponent
+    KC.changeConfigFiles({
       let newFilePath = Utility.userInputConfDirURL.appendingPathComponent(url.lastPathComponent).path
-      let newName = url.deletingPathExtension().lastPathComponent
-      // copy file
-      do {
-        try FileManager.default.copyItem(atPath: url.path, toPath: newFilePath)
-      } catch let error {
-        Utility.showAlert("config.cannot_create", arguments: [error.localizedDescription], sheetWindow: self.view.window)
+      try FileManager.default.copyItem(atPath: url.path, toPath: newFilePath)
+    }) { [self] error in
+      if let error {
+        Utility.showAlert("config.cannot_create", arguments: [error.localizedDescription], sheetWindow: view.window)
         return
       }
-      self.loadConfigFile(newName)
+      loadConfigFile(newName)
     }
   }
 
@@ -367,13 +383,21 @@ class ConfigEditor: SettingsAccessory.Base {
     guard isCurrentConfigEditable() else { return }
     Task { @MainActor in
       guard await Dialogs.ask("delete_keybindingset").show(in: kbTableView.window!) else { return }
-      do {
-        try FileManager.default.removeItem(atPath: currentConfFilePath)
-      } catch {
-        await Dialogs.alert("error_deleting_file").show(in: view.window!)
+      deleteCurrentConfig()
+    }
+  }
+
+  /// Remove the current config's file off the main thread, then load the default config.
+  func deleteCurrentConfig() {
+    let currentPath = currentConfFilePath!
+    KC.changeConfigFiles({ try FileManager.default.removeItem(atPath: currentPath) }) { [self] error in
+      Task { @MainActor in
+        if error != nil {
+          await Dialogs.alert("error_deleting_file").show(in: view.window!)
+        }
+        // Fallback to default
+        loadConfigFile(fallbackDefault)
       }
-      // Fallback to default
-      loadConfigFile(fallbackDefault)
     }
   }
 
@@ -478,22 +502,15 @@ class ConfigEditor: SettingsAccessory.Base {
     }
   }
 
+  /// Whether the current config is the user's, false until the config has been read.
   func isCurrentConfigEditable() -> Bool {
-    return KC.defaultConfigs[currentConfName] == nil
+    guard let currentConfName else { return false }
+    return !KC.isDefaultConfig(currentConfName)
   }
 
   private func setKeybindingsForPlayerCore() {
     PlayerCore.setKeyBindings(mappingController.arrangedObjects as! [KeyMapping])
-  }
-
-  private func getFilePath(forConfig conf: String, showAlert: Bool = true) -> String? {
-    let path = KC.defaultConfigs[conf] ?? KC.userConfigs[conf]
-    if path == nil {
-      if showAlert {
-        Utility.showAlert("error_finding_file", arguments: ["config"], sheetWindow: view.window)
-      }
-    }
-    return path
+    PlayerCore.inputConfPath = currentConfFilePath
   }
 }
 

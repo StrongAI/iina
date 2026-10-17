@@ -40,7 +40,8 @@ class PrefKeyBindingViewController: PreferenceViewController, PreferenceWindowEm
 
   let fallbackDefault = "IINA Default"
 
-  static var defaultConfigs: [String: String] = {
+  /// The files of the built-in input configs, by name, looked up in the bundle. Read only by `listConfigs`.
+  private static let defaultConfigs: [String: String] = {
     var configs: [String: String] = [:]
     for (key, value) in defaultConfigMap {
       configs[key] = Bundle.main.path(forResource: value, ofType: "conf", inDirectory: "config")!
@@ -48,7 +49,8 @@ class PrefKeyBindingViewController: PreferenceViewController, PreferenceWindowEm
     return configs
   }()
 
-  static var userConfigs: [String: String] {
+  /// The files of the user's input configs, by name, listed from the user's input config folder. Read only by `listConfigs`.
+  private static var userConfigs: [String: String] {
     do {
       let files = try fm.contentsOfDirectory(at: Utility.userInputConfDirURL, includingPropertiesForKeys: nil)
       let configFiles = files.filter { $0.pathExtension == "conf" }
@@ -58,10 +60,68 @@ class PrefKeyBindingViewController: PreferenceViewController, PreferenceWindowEm
     }
   }
 
-  private var cachedConfigNames: [String]!
+  /// The built-in input configs and the user's, by name, as listed by `listConfigs`.
+  struct InputConfigs {
+    /// The files of the built-in configs.
+    var defaults: [String: String] = [:]
+    /// The files of the user's configs.
+    var users: [String: String] = [:]
+
+    /// The names of the configs, the built-in ones first in their order, then the user's, sorted.
+    var names: [String] {
+      return KC.defaultConfigMap.map { $0.key } + Array(users.keys).sorted()
+    }
+
+    func path(forConfig name: String) -> String? {
+      return defaults[name] ?? users[name]
+    }
+  }
+
+  /// List the input configs, looking the built-in ones up in the bundle and listing the user's input config folder. This reads the
+  /// file system, so it is called only on `PlayerCore.keyBindingsQueue`; tests replace it to hold the listing.
+  static var listConfigs: () -> InputConfigs = {
+    return InputConfigs(defaults: defaultConfigs, users: userConfigs)
+  }
+
+  /// Whether `name` is the name of a built-in config, which is known without looking the config up.
+  static func isDefaultConfig(_ name: String) -> Bool {
+    return defaultConfigMap.contains { $0.key == name }
+  }
+
+  /// List the input configs and read the key mappings of the config named `name` on `PlayerCore.keyBindingsQueue`, so that the main
+  /// thread does not wait for the file system, then hand `completion` the configs listed, the file of the config, nil if it has
+  /// none, and its key mappings, nil if they cannot be read, on the main thread.
+  static func readConfig(named name: String, then completion: @escaping (InputConfigs, String?, [KeyMapping]?) -> Void) {
+    PlayerCore.keyBindingsQueue.async {
+      let configs = listConfigs()
+      let path = configs.path(forConfig: name)
+      let mappings = path.flatMap { KeyMapping.parseInputConf(at: $0) }
+      DispatchQueue.main.async { completion(configs, path, mappings) }
+    }
+  }
+
+  /// Change the input config files with `change` on `PlayerCore.keyBindingsQueue`, so that the main thread does not wait for the file
+  /// system, then call `completion` on the main thread with the error `change` threw, if any. Changes are made in the order asked,
+  /// before the configs are listed or read again.
+  static func changeConfigFiles(_ change: @escaping () throws -> Void, then completion: @escaping (Error?) -> Void) {
+    PlayerCore.keyBindingsQueue.async {
+      var thrown: Error?
+      do {
+        try change()
+      } catch {
+        thrown = error
+      }
+      DispatchQueue.main.async { completion(thrown) }
+    }
+  }
+
+  /// The configs the page last listed, with `listConfigs` off the main thread.
+  private(set) var configs = InputConfigs()
+
+  private var cachedConfigNames: [String] = []
 
   var configNames: [String] {
-    return KC.defaultConfigMap.map { $0.key } + Array(KC.userConfigs.keys).sorted()
+    return configs.names
   }
 
   var currentConfName: String!
@@ -87,11 +147,13 @@ class PrefKeyBindingViewController: PreferenceViewController, PreferenceWindowEm
   @IBOutlet weak var keyMappingSearchField: NSSearchField!
   @IBOutlet var mappingController: NSArrayController!
 
-  let configNameValidator: Utility.InputValidator<String> = { input in
+  /// Checks a new config's name against the built-in configs and the user's configs the page last listed, so that it does not list
+  /// them on the main thread. Where the new config's file is made, a file of its name is looked for again.
+  lazy var configNameValidator: Utility.InputValidator<String> = { [unowned self] input in
     if input.isEmpty {
       return .valueIsEmpty
     }
-    if KC.userConfigs[input] != nil || KC.defaultConfigs[input] != nil {
+    if KC.isDefaultConfig(input) || configs.users[input] != nil {
       return .valueAlreadyExists
     }
     return .ok
@@ -166,42 +228,63 @@ class PrefKeyBindingViewController: PreferenceViewController, PreferenceWindowEm
   @IBAction func newConfFileAction(_ sender: AnyObject) {
     Utility.quickPromptPanel("config.new", validator: configNameValidator, sheetWindow: view.window) { newName in
       self.newConfigFilePath(forName: newName) { newFilePath in
-        if !fm.createFile(atPath: newFilePath, contents: nil, attributes: nil) {
-          Utility.showAlert("config.cannot_create", sheetWindow: self.view.window)
-          return
-        }
-        self.loadConfigFile(newName)
+        self.createConfig(named: newName, at: newFilePath)
       }
+    }
+  }
+
+  /// Make an empty config file at `path` off the main thread, then load it as the config named `name`.
+  func createConfig(named name: String, at path: String) {
+    KC.changeConfigFiles({
+      guard fm.createFile(atPath: path, contents: nil, attributes: nil) else { throw CocoaError(.fileWriteUnknown) }
+    }) { [self] error in
+      guard error == nil else {
+        Utility.showAlert("config.cannot_create", sheetWindow: view.window)
+        return
+      }
+      loadConfigFile(name)
     }
   }
 
   @IBAction func duplicateConfFileAction(_ sender: AnyObject) {
     Utility.quickPromptPanel("config.duplicate", validator: configNameValidator, sheetWindow: view.window) { newName in
       self.newConfigFilePath(forName: newName) { newFilePath in
-        do {
-          try fm.copyItem(atPath: self.currentConfFilePath!, toPath: newFilePath)
-        } catch let error {
-          Utility.showAlert("config.cannot_create", arguments: [error.localizedDescription], sheetWindow: self.view.window)
-          return
-        }
-        self.loadConfigFile(newName)
+        self.duplicateConfig(named: newName, at: newFilePath)
       }
     }
     
+  }
+
+  /// Copy the current config's file to `path` off the main thread, then load the copy as the config named `name`.
+  func duplicateConfig(named name: String, at path: String) {
+    let currentPath = currentConfFilePath!
+    KC.changeConfigFiles({ try fm.copyItem(atPath: currentPath, toPath: path) }) { [self] error in
+      if let error {
+        Utility.showAlert("config.cannot_create", arguments: [error.localizedDescription], sheetWindow: view.window)
+        return
+      }
+      loadConfigFile(name)
+    }
   }
   
   @IBAction func configFileListDoubleAction(_ sender: NSTableView) {
     guard shouldEnableEdit else { return }
     Utility.quickPromptPanel("config.rename", validator: configNameValidator, sheetWindow: view.window) { newName in
       self.newConfigFilePath(forName: newName) { newFilePath in
-        do {
-          try fm.moveItem(atPath: self.currentConfFilePath!, toPath: newFilePath)
-        } catch let error {
-          Utility.showAlert("config.cannot_create", arguments: [error.localizedDescription], sheetWindow: self.view.window)
-          return
-        }
-        self.loadConfigFile(newName)
+        self.renameConfig(to: newName, at: newFilePath)
       }
+    }
+  }
+
+  /// Move the current config's file to `path` off the main thread, then load it as the config named `name`.
+  func renameConfig(to name: String, at path: String) {
+    let currentPath = currentConfFilePath!
+    KC.changeConfigFiles({ try fm.moveItem(atPath: currentPath, toPath: path) }) { [self] error in
+      if let error {
+        Utility.showAlert("config.cannot_create", arguments: [error.localizedDescription], sheetWindow: view.window)
+        return
+      }
+      loadConfigFile(name)
     }
   }
 
@@ -209,29 +292,37 @@ class PrefKeyBindingViewController: PreferenceViewController, PreferenceWindowEm
     Utility.revealInFinder(filesAtPaths: [currentConfFilePath])
   }
 
+  /// Remove the current config's file off the main thread, then load the default config.
   @IBAction func deleteConfFileAction(_ sender: AnyObject) {
-    do {
-      try FileManager.default.removeItem(atPath: currentConfFilePath)
-    } catch {
-      Utility.showAlert("error_deleting_file", sheetWindow: view.window)
+    let currentPath = currentConfFilePath!
+    KC.changeConfigFiles({ try FileManager.default.removeItem(atPath: currentPath) }) { [self] error in
+      if error != nil {
+        Utility.showAlert("error_deleting_file", sheetWindow: view.window)
+      }
+      // Fallback to default
+      loadConfigFile(fallbackDefault)
     }
-    // Fallback to default
-    loadConfigFile(fallbackDefault)
   }
 
   @IBAction func importConfigBtnAction(_ sender: Any) {
     Utility.quickOpenPanel(title: "Select Config File to Import", chooseDir: false, sheetWindow: view.window, allowedFileTypes: ["conf"]) { url in
       guard url.isFileURL, url.lastPathComponent.hasSuffix(".conf") else { return }
+      self.importConfig(from: url)
+    }
+  }
+
+  /// Copy the config file at `url` into the user's input config folder off the main thread, then load the copy.
+  func importConfig(from url: URL) {
+    let newName = url.deletingPathExtension().lastPathComponent
+    KC.changeConfigFiles({
       let newFilePath = Utility.userInputConfDirURL.appendingPathComponent(url.lastPathComponent).path
-      let newName = url.deletingPathExtension().lastPathComponent
-      // copy file
-      do {
-        try FileManager.default.copyItem(atPath: url.path, toPath: newFilePath)
-      } catch let error {
-        Utility.showAlert("config.cannot_create", arguments: [error.localizedDescription], sheetWindow: self.view.window)
+      try FileManager.default.copyItem(atPath: url.path, toPath: newFilePath)
+    }) { [self] error in
+      if let error {
+        Utility.showAlert("config.cannot_create", arguments: [error.localizedDescription], sheetWindow: view.window)
         return
       }
-      self.loadConfigFile(newName)
+      loadConfigFile(newName)
     }
   }
 
@@ -255,7 +346,10 @@ class PrefKeyBindingViewController: PreferenceViewController, PreferenceWindowEm
     configHintLabel.stringValue = NSLocalizedString("preference.key_binding_hint_\(shouldEnableEdit ? "2" : "1")", comment: "preference.key_binding_hint")
   }
 
+  /// Set the page's key mappings as the key bindings, then write them to the current config's file off the main thread.
   func saveToConfFile(_ sender: Notification) {
+    // A page whose config has not been read yet has no key mappings to save.
+    guard let currentConfFilePath else { return }
     let predicate = mappingController.filterPredicate
     mappingController.filterPredicate = nil
     let keyMappings = mappingController.arrangedObjects as! [KeyMapping]
@@ -264,10 +358,11 @@ class PrefKeyBindingViewController: PreferenceViewController, PreferenceWindowEm
     }
     setKeybindingsForPlayerCore()
     mappingController.filterPredicate = predicate
-    do {
-      try KeyMapping.generateInputConf(from: keyMappings).write(toFile: currentConfFilePath, atomically: true, encoding: .utf8)
-    } catch {
-      Utility.showAlert("config.cannot_write", sheetWindow: view.window)
+    let inputConf = KeyMapping.generateInputConf(from: keyMappings)
+    KC.changeConfigFiles({ try inputConf.write(toFile: currentConfFilePath, atomically: true, encoding: .utf8) }) { [self] error in
+      if error != nil {
+        Utility.showAlert("config.cannot_write", sheetWindow: view.window)
+      }
     }
   }
 
@@ -289,31 +384,36 @@ class PrefKeyBindingViewController: PreferenceViewController, PreferenceWindowEm
       loadConfigFile(fallbackDefault)
     }
 
-    guard let configName = configName,
-          let confFilePath = getFilePath(forConfig: configName, showAlert: false) else { fallback(); return }
-    
-    cachedConfigNames = configNames
-    confTableView.reloadData()
-    if let index = cachedConfigNames.firstIndex(of: configName) {
-      confTableView.selectRowIndexes(IndexSet(integer: index), byExtendingSelection: false)
+    guard let configName = configName else { fallback(); return }
+
+    // The configs are listed, and the config read, off the main thread.
+    KC.readConfig(named: configName) { [self] configs, confFilePath, mapping in
+      self.configs = configs
+      guard let confFilePath else { fallback(); return }
+
+      cachedConfigNames = configNames
+      confTableView.reloadData()
+      if let index = cachedConfigNames.firstIndex(of: configName) {
+        confTableView.selectRowIndexes(IndexSet(integer: index), byExtendingSelection: false)
+      }
+      currentConfName = configName
+      currentConfFilePath = confFilePath
+
+      guard let mapping else { fallback(); return }
+
+      mappingController.content = nil
+      mappingController.add(contentsOf: mapping)
+      mappingController.setSelectionIndexes(IndexSet())
+
+      changeButtonEnabledStatus()
+
+      if !initialSetup {
+        Preference.set(currentConfName, for: .currentInputConfigName)
+        setKeybindingsForPlayerCore()
+      }
+
+      isLoadingConfig = false
     }
-    currentConfName = configName
-    currentConfFilePath = confFilePath
-    
-    guard let mapping = KeyMapping.parseInputConf(at: currentConfFilePath) else { fallback(); return }
-    
-    mappingController.content = nil
-    mappingController.add(contentsOf: mapping)
-    mappingController.setSelectionIndexes(IndexSet())
-
-    changeButtonEnabledStatus()
-
-    if !initialSetup {
-      Preference.set(currentConfName, for: .currentInputConfigName)
-      setKeybindingsForPlayerCore()
-    }
-
-    isLoadingConfig = false
   }
 
   /// Check whether or not a new config file with provided filename should be created, on `Utility.workspaceQueue` since the check
@@ -339,22 +439,13 @@ class PrefKeyBindingViewController: PreferenceViewController, PreferenceWindowEm
     }
   }
 
-  private func getFilePath(forConfig conf: String, showAlert: Bool = true) -> String? {
-    let path = KC.defaultConfigs[conf] ?? KC.userConfigs[conf]
-    if path == nil {
-      if showAlert {
-        Utility.showAlert("error_finding_file", arguments: ["config"], sheetWindow: view.window)
-      }
-    }
-    return path
-  }
-
   private func isDefaultConfig(_ conf: String) -> Bool {
-    return KC.defaultConfigs[conf] != nil
+    return KC.isDefaultConfig(conf)
   }
 
   private func setKeybindingsForPlayerCore() {
     PlayerCore.setKeyBindings(mappingController.arrangedObjects as! [KeyMapping])
+    PlayerCore.inputConfPath = currentConfFilePath
   }
 
 }

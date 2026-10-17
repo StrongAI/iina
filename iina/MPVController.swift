@@ -686,14 +686,9 @@ class MPVController: NSObject {
     // Load external scripts
 
     // Load keybindings. This is still required for mpv to handle media keys or apple remote.
-    let userConfigs = PrefKeyBindingViewController.userConfigs
-    var inputConfPath =  PrefKeyBindingViewController.defaultConfigs["IINA Default"]
-    if let confFromUd = Preference.string(for: .currentInputConfigName) {
-      if let currentConfigFilePath = Utility.getFilePath(Configs: userConfigs, forConfig: confFromUd, showAlert: false) {
-        inputConfPath = currentConfigFilePath
-      }
-    }
-    chkErr(setOptionalOptionString(MPVOption.Input.inputConf, inputConfPath, level: .verbose))
+    // The input config is the one the key bindings were read from off the main thread, so that listing the configs does not wait
+    // for the file system here. A player started before the key bindings have first been read gives mpv none.
+    chkErr(setOptionalOptionString(MPVOption.Input.inputConf, PlayerCore.inputConfPath, level: .verbose))
 
     // Receive log messages at warn level.
     chkErr(mpv_request_log_messages(mpv, MPVLogLevel))

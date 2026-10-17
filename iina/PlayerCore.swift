@@ -652,21 +652,26 @@ class PlayerCore: NSObject {
   /// The queue the key bindings are read on, so that the main thread does not wait for the file system.
   static let keyBindingsQueue = DispatchQueue(label: "IINAKeyBindings", qos: .userInitiated)
 
+  /// The input config file the key bindings were last read from, which each player's `mpv` is given when it starts. Nil until
+  /// `loadKeyBindings(then:)` has read the key bindings; read and set on the main thread.
+  static var inputConfPath: String?
+
   /// Read the key bindings of the current input config on `keyBindingsQueue`, listing the user's configs and parsing the config
   /// file there, then set them on the main thread and call `completion` there.
   static func loadKeyBindings(then completion: @escaping () -> Void = {}) {
     Logger.log("Loading key bindings")
     keyBindingsQueue.async {
-      let userConfigs = PrefKeyBindingViewController.userConfigs
-      let iinaDefaultConfPath = PrefKeyBindingViewController.defaultConfigs["IINA Default"]!
+      let configs = PrefKeyBindingViewController.listConfigs()
+      let iinaDefaultConfPath = configs.defaults["IINA Default"]!
       var inputConfPath = iinaDefaultConfPath
       if let confFromUd = Preference.string(for: .currentInputConfigName) {
-        if let currentConfigFilePath = Utility.getFilePath(Configs: userConfigs, forConfig: confFromUd, showAlert: false) {
+        if let currentConfigFilePath = configs.path(forConfig: confFromUd) {
           inputConfPath = currentConfigFilePath
         }
       }
       let keyMappings = KeyMapping.parseInputConf(at: inputConfPath) ?? KeyMapping.parseInputConf(at: iinaDefaultConfPath)!
       DispatchQueue.main.async {
+        self.inputConfPath = inputConfPath
         setKeyBindings(keyMappings)
         completion()
       }
