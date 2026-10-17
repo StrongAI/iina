@@ -77,8 +77,15 @@ class Shooter {
 
     private var language: String?
 
+    /// The serial queue the media file is hashed on, so that the main thread does not wait for the file to be read.
+    static let hashQueue = DispatchQueue(label: "IINAShooterHash", qos: .userInitiated)
+
     func fetch(from url: URL, withProviderID id: String, playerCore player: PlayerCore) -> Promise<[Subtitle]> {
-      return hash(url).then { self.request($0) }
+      return Promise.value(()).then(on: Fetcher.hashQueue) {
+        self.hash(url)
+      }.then {
+        self.request($0)
+      }
     }
 
     private func hash(_ url: URL) -> Promise<FileInfo> {
