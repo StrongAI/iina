@@ -73,16 +73,14 @@ class ViewLayer: CAOpenGLLayer {
 
   private var bufferDepth: GLint = 8
 
-  private let cglContext: CGLContextObj
+  /// The OpenGL context the layer draws with, which `mpv`'s renderer is created with.
+  let cglContext: CGLContextObj
   private let cglPixelFormat: CGLPixelFormatObj
 
-  /// Lock to single thread calls to `display`.
-  private let displayLock: NSLocking
+  /// Lock to single thread calls to `display`, held for the whole of a frame. Internal so that tests can hold it.
+  let displayLock: NSLocking
 
   private var fbo: GLint = 1
-
-  /// Lock used to allow the main thread priority access to `displayLock`.
-  private var mainThreadPriorityLock = MainThreadPriorityLock()
 
   /// When `true` the frame needs to be rendered.
   @Atomic private var needsFlip = false
@@ -258,29 +256,30 @@ class ViewLayer: CAOpenGLLayer {
   override func copyCGLContext(forPixelFormat pf: CGLPixelFormatObj) -> CGLContextObj { cglContext }
 
   /// Reload the content of this layer.
+  ///
+  /// The layer is drawn only on `mpvGLQueue`. Core Animation calls this on the main thread when it lays the layer out or redraws it,
+  /// the layer not being asynchronous, and drawing a frame holds `displayLock` and the OpenGL context while `mpv` renders it, so on
+  /// the main thread the frame is handed to `mpvGLQueue` and the layer keeps its contents until it is drawn there.
   /// - Important: Because this method is called by tasks on the `mpvGLQueue` an explicit
   ///     [CATransaction](https://developer.apple.com/documentation/quartzcore/catransaction) **must**
   ///     be used. Otherwise if `CA_ASSERT_MAIN_THREAD_TRANSACTIONS` is set to check for unintended UI operations on
   ///     something other than the main thread, IINA will crash with a SIGABRT reporting "an implicit transaction wasn't created on a
   ///     main thread". See issue [#5038](https://github.com/iina/iina/issues/5038).
   override func display() {
+    guard !Thread.isMainThread else {
+      mpvGLQueue.async { [self] in display() }
+      return
+    }
 
-    // May need to block other threads to allow the main thread to lock displayLock.
-    mainThreadPriorityLock.beforeLocking()
     displayLock.lock()
     defer { displayLock.unlock() }
-    mainThreadPriorityLock.afterLocked()
 
     let isUpdate = needsFlip
 
-    if Thread.isMainThread {
-      super.display()
-    } else {
-      // When not on the main thread use an explicit transaction.
-      CATransaction.begin()
-      super.display()
-      CATransaction.commit()
-    }
+    // Not on the main thread, so use an explicit transaction.
+    CATransaction.begin()
+    super.display()
+    CATransaction.commit()
 
     // The call to commit will not render the explicit transaction if it is nested in an implicit
     // transaction. This can happen when drawing is being forced after a change to the view such as
@@ -541,49 +540,5 @@ class ViewLayer: CAOpenGLLayer {
 
   func ignoreGLError() {
     glGetError()
-  }
-}
-
-// MARK: - Main Thread Priority
-
-/// Lock used to give the main thread priority access to another lock.
-///
-/// Testing revealed that the main thread encounters lock starvation while trying to acquire `displayLock` when the `mpvGLQueue`
-/// thread is constantly locking and unlocking the lock during playback. This sometimes results in a severe hang causing the spinning
-/// beach ball of death to be displayed. This lock uses a
-/// [NSCondition](https://developer.apple.com/documentation/foundation/nscondition) to block other threads
-/// when the main thread needs to lock a lock, giving the main thread a chance to acquire the lock.
-private class MainThreadPriorityLock {
-
-  private let lock = NSCondition()
-
-  /// `True` when the main thread is waiting to lock a lock; `false` otherwise.
-  private var needsLock = false
-
-  /// All threads call this before attempting to lock a lock the main thread has trouble acquiring.
-  ///
-  /// When called by the main thread this function will record that the main thread is waiting for a lock. When called by other threads
-  /// this function will block the thread if the main thread is waiting, allowing it to proceed once the main thread has locked the lock.
-  func beforeLocking() {
-    lock.lock()
-    defer { lock.unlock() }
-    guard Thread.isMainThread else {
-      while needsLock { lock.wait() }
-      return
-    }
-    needsLock = true
-  }
-
-  /// All threads call this after locking a lock the main thread has trouble acquiring.
-  ///
-  /// When called by the main thread this function will record that the main thread has the lock and will allow any blocked threads to
-  /// proceed. When called by other threads this function does nothing. This avoids the caller only calling this when running on the
-  /// main thread.
-  func afterLocked() {
-    guard Thread.isMainThread else { return }
-    lock.lock()
-    defer { lock.unlock() }
-    needsLock = false
-    lock.broadcast()
   }
 }

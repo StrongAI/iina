@@ -756,15 +756,9 @@ class PlayerCore: NSObject {
   }
 
   func initVideo() {
-    // init mpv render context.
+    // init mpv render context, which sets force-window once the render context exists.
     mpv.mpvInitRendering()
-    // `force-window=immediate` makes audio-only subtitle rendering work with `vo=libmpv`,
-    // but setting it before render initialization can race the VO thread against IINA's
-    // render context setup. Switch to `immediate` only after the render context exists.
-    mpv.setString(MPVOption.Window.forceWindow, "immediate", level: .verbose)
     mainWindow.videoView.startDisplayLink()
-    log("Initialized rendering")
-    MemoryUsage.shared.logUsage("after rendering initialized")
   }
 
   // unload main window video view

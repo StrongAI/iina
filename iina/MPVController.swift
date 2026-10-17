@@ -736,32 +736,60 @@ class MPVController: NSObject {
     chkErr(setOptionString(MPVOption.Video.gpuHwdecInterop, "auto", level: .verbose))
   }
 
-  /// Initialize the `mpv` renderer.
+  /// Initialize the `mpv` renderer, without the calling thread waiting for `mpv` to create its video output.
   ///
   /// This method creates and initializes the `mpv` renderer and sets the callback that `mpv` calls when a new video frame is available.
+  /// The renderer is created in request order, see `inRequestOrder`, with the OpenGL context of the video view's layer locked and
+  /// current, so that `mpv` handles the requests made after this, such as loading a file, once the renderer exists. Then
+  /// `force-window` is set to `immediate`, which makes audio-only subtitle rendering work with `vo=libmpv`, but set before the renderer
+  /// exists can race the video output thread against its creation.
   ///
   /// - Note: Advanced control must be enabled for the screenshot command to work when the window flag is used. See issue
   ///         [#4822](https://github.com/iina/iina/issues/4822) for details.
   func mpvInitRendering() {
-    guard let mpv else {
+    guard mpv != nil else {
       fatalError("mpvInitRendering() should be called after mpv handle being initialized!")
     }
-    let apiType = UnsafeMutableRawPointer(mutating: (MPV_RENDER_API_TYPE_OPENGL as NSString).utf8String)
-    var openGLInitParams = mpv_opengl_init_params(get_proc_address: mpvGetOpenGLFunc,
-                                                  get_proc_address_ctx: nil)
-    withUnsafeMutablePointer(to: &openGLInitParams) { openGLInitParams in
-      var advanced: CInt = 1
-      withUnsafeMutablePointer(to: &advanced) { advanced in
-        var params = [
-          mpv_render_param(type: MPV_RENDER_PARAM_API_TYPE, data: apiType),
-          mpv_render_param(type: MPV_RENDER_PARAM_OPENGL_INIT_PARAMS, data: openGLInitParams),
-          mpv_render_param(type: MPV_RENDER_PARAM_ADVANCED_CONTROL, data: advanced),
-          mpv_render_param()
-        ]
-        chkErr(mpv_render_context_create(&mpvRenderContext, mpv, &params))
+    let videoView: VideoView = player.mainWindow.videoView
+    let layer = videoView.videoLayer
+    openGLContext = layer.cglContext
+    inRequestOrder { [self] in
+      // No frame is drawn with the OpenGL context while the renderer is created with it.
+      layer.displayLock.lock()
+      defer { layer.displayLock.unlock() }
+      lockAndSetOpenGLContext()
+      defer { unlockOpenGLContext() }
+      let apiType = UnsafeMutableRawPointer(mutating: (MPV_RENDER_API_TYPE_OPENGL as NSString).utf8String)
+      var openGLInitParams = mpv_opengl_init_params(get_proc_address: mpvGetOpenGLFunc,
+                                                    get_proc_address_ctx: nil)
+      var renderContext: OpaquePointer?
+      withUnsafeMutablePointer(to: &openGLInitParams) { openGLInitParams in
+        var advanced: CInt = 1
+        withUnsafeMutablePointer(to: &advanced) { advanced in
+          var params = [
+            mpv_render_param(type: MPV_RENDER_PARAM_API_TYPE, data: apiType),
+            mpv_render_param(type: MPV_RENDER_PARAM_OPENGL_INIT_PARAMS, data: openGLInitParams),
+            mpv_render_param(type: MPV_RENDER_PARAM_ADVANCED_CONTROL, data: advanced),
+            mpv_render_param()
+          ]
+          chkErr(mpv_render_context_create(&renderContext, mpv, &params))
+        }
       }
-      openGLContext = CGLGetCurrentContext()
-      mpv_render_context_set_update_callback(mpvRenderContext!, mpvUpdateCallback, mutableRawPointerOf(obj: player.mainWindow.videoView.videoLayer))
+      guard let renderContext else { return }
+      // The display link and the layer read the renderer under the view's isUninited lock, and a view uninitialized meanwhile has
+      // no use for it.
+      let isUninited = videoView.$isUninited.withWriteLock { uninited in
+        if !uninited { mpvRenderContext = renderContext }
+        return uninited
+      }
+      guard !isUninited else {
+        mpv_render_context_free(renderContext)
+        return
+      }
+      mpv_render_context_set_update_callback(renderContext, mpvUpdateCallback, mutableRawPointerOf(obj: layer))
+      setStringAsync(MPVOption.Window.forceWindow, "immediate", level: .verbose)
+      player.log("Initialized rendering")
+      MemoryUsage.shared.logUsage("after rendering initialized")
     }
   }
 

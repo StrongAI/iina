@@ -384,9 +384,14 @@ class VideoView: NSView {
         let name = screenColorSpace.localizedName ?? "unnamed"
         logHDR("Using the ICC profile of the color space \(name)")
         // Set MPV_RENDER_PARAM_ICC_PROFILE before enabling icc-profile-auto to true as mpv requires
-        // that parameter be set in the render context when icc-profile-auto is in use.
-        videoLayer.setRenderICCProfile(screenColorSpace)
-        mpv.setFlagAsync(MPVOption.GPURendererOptions.iccProfileAuto, true)
+        // that parameter be set in the render context when icc-profile-auto is in use. It is set in
+        // request order, after the render context is created, so that the main thread does not wait
+        // for the OpenGL context a frame being drawn holds.
+        let layer = videoLayer
+        mpv.inRequestOrder {
+          layer.setRenderICCProfile(screenColorSpace)
+          mpv.setFlagAsync(MPVOption.GPURendererOptions.iccProfileAuto, true)
+        }
       } else {
         logHDR("Failed find ICC profile to load", level: .error)
         mpv.setFlagAsync(MPVOption.GPURendererOptions.iccProfileAuto, false)
