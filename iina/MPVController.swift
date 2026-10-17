@@ -886,6 +886,19 @@ class MPVController: NSObject {
     }
   }
 
+  /// Run `work` on `rawCommandQueue`, unless `mpv` is destroyed by then, holding the requests made meanwhile behind it, so that work
+  /// the calling thread must not wait for, such as a lookup of the system or a read of `MPVOptionDefaults`, is done before them and
+  /// `mpv` is asked what `work` asks before them.
+  func inRequestOrder(_ work: @escaping () -> Void) {
+    $rawCommandQueueLength.withLock { length in
+      length += 1
+      rawCommandQueue.async { [self] in
+        if mpv != nil { work() }
+        $rawCommandQueueLength.withLock { $0 -= 1 }
+      }
+    }
+  }
+
   /// Run the raw command string `rawString` on `rawCommandQueue`, calling `reply` on the main thread with the error code `mpv`
   /// returns for it. `mpv` has no asynchronous form of a command string, so the queue waits for `mpv` in place of the calling thread,
   /// and the requests made while the command is in flight are held behind it, so that `mpv` handles them after it.
@@ -1025,6 +1038,18 @@ class MPVController: NSObject {
     }
     log("Set property to default: \(name)=\(value)", level: level)
     return mpv_set_property_string(mpv, name, value)
+  }
+
+  /// Set the given option to its default value asynchronously, without waiting for `mpv`: the default is read from
+  /// `MPVOptionDefaults` on `rawCommandQueue`, see `inRequestOrder`, and set there with `setStringAsync`.
+  func setStringToDefaultAsync(_ name: String, level: Logger.Level = .debug) {
+    inRequestOrder { [self] in
+      guard let value = MPVOptionDefaults.shared.getString(name) else {
+        log("Failed to obtain default for option: \(name)", level: .error)
+        return
+      }
+      setStringAsync(name, value, level: level)
+    }
   }
 
   func getEnum<T: MPVOptionValue>(_ name: String) -> T {

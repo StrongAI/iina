@@ -266,7 +266,7 @@ class VideoView: NSView {
       log("Falling back to standard display refresh rate: 60 from \(actualFps)")
       actualFps = 60
     }
-    player.mpv.setDouble(MPVOption.Video.displayFpsOverride, actualFps)
+    player.mpv.setDoubleAsync(MPVOption.Video.displayFpsOverride, actualFps)
 
     refreshEdrMode()
   }
@@ -309,9 +309,10 @@ class VideoView: NSView {
   }
 
 #if !USE_ICC_PROFILE_AUTO
-  private func findProfilePath() -> String? {
-    guard let displayId = currentDisplay,
-          let uuid = CGDisplayCreateUUIDFromDisplayID(displayId)?.takeRetainedValue() else {
+  /// The path of the current ICC profile of the display `displayId`, if it has one and the file is there. It iterates the ColorSync
+  /// device profiles and looks for the file, so the main thread must not call it.
+  static func findProfilePath(for displayId: CGDirectDisplayID) -> String? {
+    guard let uuid = CGDisplayCreateUUIDFromDisplayID(displayId)?.takeRetainedValue() else {
       return nil
     }
     typealias ProfileData = (uuid: CFUUID, profileUrl: URL?)
@@ -339,7 +340,9 @@ class VideoView: NSView {
   }
 #endif
 
-  /// Set the ICC profile and adjust the view layer.
+  /// Set the ICC profile and adjust the view layer. The options are set without waiting for `mpv`, and the display's profile is
+  /// looked up on the queue `mpv.inRequestOrder` runs its work on, so that the main thread does not wait for ColorSync or the file
+  /// system.
   /// - Important: IINA should be using the mpv
   ///     [icc-profile-auto](https://mpv.io/manual/stable/#options-icc-profile-auto) option because that allows
   ///     users to make use of the mpv [icc-profile](https://mpv.io/manual/stable/#options-icc-profile) option
@@ -348,13 +351,14 @@ class VideoView: NSView {
   ///     problem is fixed, IINA must go back to using `icc-profile`. The code to support `icc-profile-auto` can be
   ///     enabled by setting `USE_ICC_PROFILE_AUTO` in Xcode settings to test a proposed fix to `libmpv`.
   private func setICCProfile() {
+    guard let mpv = player.mpv else { return }
     let screenColorSpace = player.mainWindow.window?.screen?.colorSpace
     if !Preference.bool(for: .loadIccProfile) {
       logHDR("Not using ICC profile due to user preference")
 #if USE_ICC_PROFILE_AUTO
-      player.mpv.setFlag(MPVOption.GPURendererOptions.iccProfileAuto, false)
+      mpv.setFlagAsync(MPVOption.GPURendererOptions.iccProfileAuto, false)
 #else
-      player.mpv.setString(MPVOption.GPURendererOptions.iccProfile, "")
+      mpv.setStringAsync(MPVOption.GPURendererOptions.iccProfile, "")
 #endif
     } else {
 #if USE_ICC_PROFILE_AUTO
@@ -364,18 +368,22 @@ class VideoView: NSView {
         // Set MPV_RENDER_PARAM_ICC_PROFILE before enabling icc-profile-auto to true as mpv requires
         // that parameter be set in the render context when icc-profile-auto is in use.
         videoLayer.setRenderICCProfile(screenColorSpace)
-        player.mpv.setFlag(MPVOption.GPURendererOptions.iccProfileAuto, true)
+        mpv.setFlagAsync(MPVOption.GPURendererOptions.iccProfileAuto, true)
       } else {
         logHDR("Failed find ICC profile to load", level: .error)
-        player.mpv.setFlag(MPVOption.GPURendererOptions.iccProfileAuto, false)
+        mpv.setFlagAsync(MPVOption.GPURendererOptions.iccProfileAuto, false)
       }
 #else
-      if let iccProfilePath = findProfilePath() {
-        logHDR("Loading ICC profile: \(iccProfilePath)")
-        player.mpv.setString(MPVOption.GPURendererOptions.iccProfile, iccProfilePath)
-      } else {
-        logHDR("Failed to find ICC profile to load", level: .error)
-        player.mpv.setString(MPVOption.GPURendererOptions.iccProfile, "")
+      let displayId = currentDisplay
+      let subsystem = hdrSubsystem
+      mpv.inRequestOrder {
+        if let iccProfilePath = displayId.flatMap(VideoView.findProfilePath) {
+          Logger.log("Loading ICC profile: \(iccProfilePath)", subsystem: subsystem)
+          mpv.setStringAsync(MPVOption.GPURendererOptions.iccProfile, iccProfilePath)
+        } else {
+          Logger.log("Failed to find ICC profile to load", level: .error, subsystem: subsystem)
+          mpv.setStringAsync(MPVOption.GPURendererOptions.iccProfile, "")
+        }
       }
 #endif
     }
@@ -390,9 +398,9 @@ class VideoView: NSView {
       log("Setting layer color space to \(name)")
       videoLayer.colorspace = sdrColorSpace
       videoLayer.wantsExtendedDynamicRangeContent = false
-      player.mpv.setString(MPVOption.GPURendererOptions.targetTrc, "auto")
-      player.mpv.setString(MPVOption.GPURendererOptions.targetPrim, "auto")
-      player.mpv.setFlag(MPVOption.Screenshot.screenshotTagColorspace, false)
+      mpv.setStringAsync(MPVOption.GPURendererOptions.targetTrc, "auto")
+      mpv.setStringAsync(MPVOption.GPURendererOptions.targetPrim, "auto")
+      mpv.setFlagAsync(MPVOption.Screenshot.screenshotTagColorspace, false)
     }
   }
 
@@ -470,16 +478,31 @@ class VideoView: NSView {
 // MARK: - HDR
 
 extension VideoView {
+  /// Refresh the EDR mode for the video and the display. The video's color parameters are read without waiting for `mpv`, then the
+  /// mode is chosen on the main thread and the options it needs are set without waiting for `mpv`.
   func refreshEdrMode() {
-    guard player.mainWindow.loaded, player.info.state.loaded, let displayId = currentDisplay else { return }
+    guard player.mainWindow.loaded, player.info.state.loaded, let displayId = currentDisplay, let mpv = player.mpv else { return }
     if let screen = self.window?.screen {
       NSScreen.logEDR("Refreshing HDR for \(player.subsystem.rawValue) on display\(displayId)",
                       screen, subsystem: hdrSubsystem)
     }
+    let names = [MPVProperty.videoParamsPrimaries, MPVProperty.videoParamsGamma, MPVProperty.videoParamsSigPeak]
+    mpv.getStringsAsync(names) { [weak self] values in
+      DispatchQueue.main.async {
+        self?.refreshEdrMode(primaries: values[0], gamma: values[1], peak: values[2].flatMap { Double($0) } ?? 0,
+                             on: displayId)
+      }
+    }
+  }
+
+  /// Choose the EDR mode for the color parameters `mpv` answered, unless the view has been uninitialized or has moved to another
+  /// display since they were asked for, a refresh for that display having been asked for then.
+  private func refreshEdrMode(primaries: String?, gamma: String?, peak: Double, on displayId: CGDirectDisplayID) {
+    guard !isUninited, currentDisplay == displayId, player.info.state.loaded else { return }
     let edrEnabled: Bool?
-    if isHDRVideo() {
-      edrEnabled = requestEdrMode()
-      setToneMappingForHDR()
+    if let primaries, isHDRVideo(primaries: primaries, gamma: gamma, peak: peak) {
+      edrEnabled = requestEdrMode(primaries: primaries)
+      setToneMappingForHDR(on: displayId)
     } else {
       edrEnabled = false
       setToneMappingForSDR()
@@ -495,13 +518,11 @@ extension VideoView {
   /// Returns `true` if the video being played is a HDR video.
   /// - Returns: `true` if the video is known to be a HDR video, `false` if the video is SDR or the required information is not
   ///     available.
-  private func isHDRVideo() -> Bool {
-    guard let mpv = player.mpv else { return false }
-    guard let primaries = mpv.getString(MPVProperty.videoParamsPrimaries), let gamma = mpv.getString(MPVProperty.videoParamsGamma) else {
+  private func isHDRVideo(primaries: String?, gamma: String?, peak: Double) -> Bool {
+    guard let primaries, let gamma else {
       logHDR("Video gamma and primaries not available")
       return false
     }
-    let peak = mpv.getDouble(MPVProperty.videoParamsSigPeak)
     logHDR("Video gamma=\(gamma), primaries=\(primaries), sig_peak=\(peak)")
 
     // HDR videos use a Hybrid Log Gamma (HLG) or a Perceptual Quantization (PQ) transfer function.
@@ -520,7 +541,7 @@ extension VideoView {
     }
   }
 
-  func requestEdrMode() -> Bool? {
+  private func requestEdrMode(primaries: String) -> Bool? {
     guard let mpv = player.mpv else { return false }
 
     guard (window?.screen?.maximumPotentialExtendedDynamicRangeColorComponentValue ?? 1.0) > 1.0 else {
@@ -530,7 +551,6 @@ extension VideoView {
 
     guard player.info.hdrEnabled else { return nil }
 
-    guard let primaries = mpv.getString(MPVProperty.videoParamsPrimaries) else { return false }
     let name: CFString
     switch primaries {
     case "display-p3":
@@ -550,74 +570,85 @@ extension VideoView {
     videoLayer.wantsExtendedDynamicRangeContent = true
     videoLayer.colorspace = CGColorSpace(name: name)
 #if USE_ICC_PROFILE_AUTO // See setICCProfile.
-    mpv.setFlag(MPVOption.GPURendererOptions.iccProfileAuto, false)
+    mpv.setFlagAsync(MPVOption.GPURendererOptions.iccProfileAuto, false)
 #else
-    mpv.setString(MPVOption.GPURendererOptions.iccProfile, "")
+    mpv.setStringAsync(MPVOption.GPURendererOptions.iccProfile, "")
 #endif
-    mpv.setString(MPVOption.GPURendererOptions.targetPrim, primaries)
+    mpv.setStringAsync(MPVOption.GPURendererOptions.targetPrim, primaries)
     // PQ videos will be display as it was, HLG videos will be converted to PQ
-    mpv.setString(MPVOption.GPURendererOptions.targetTrc, "pq")
-    mpv.setFlag(MPVOption.Screenshot.screenshotTagColorspace, true)
+    mpv.setStringAsync(MPVOption.GPURendererOptions.targetTrc, "pq")
+    mpv.setFlagAsync(MPVOption.Screenshot.screenshotTagColorspace, true)
     return true
   }
 
-  /// Set the mpv tone mapping options appropriately for a HDR video.
+  /// Set the mpv tone mapping options appropriately for a HDR video on the display `displayId`, without waiting for `mpv`.
   ///
   /// If tone mapping is enabled then this method will set the following mpv options based on IINA's tone mapping settings:
   /// - [target-peak](https://mpv.io/manual/stable/#options-target-peak)
   /// - [tone-mapping](https://mpv.io/manual/stable/#options-tone-mapping)
   ///
-  /// Otherwise these options will be set to their default values.
-  private func setToneMappingForHDR() {
+  /// Otherwise these options will be set to their default values. The display's peak brightness is looked up on the queue
+  /// `mpv.inRequestOrder` runs its work on, so that the main thread does not wait for CoreDisplay.
+  private func setToneMappingForHDR(on displayId: CGDirectDisplayID) {
     guard let mpv = player.mpv else { return }
     guard Preference.bool(for: .enableToneMapping) else {
       // Reset options to their defaults.
-      mpv.setStringToDefault(MPVOption.GPURendererOptions.targetPeak)
-      mpv.setStringToDefault(MPVOption.GPURendererOptions.toneMapping)
-      mpv.setStringToDefault(MPVOption.GPURendererOptions.toneMappingParam)
+      mpv.setStringToDefaultAsync(MPVOption.GPURendererOptions.targetPeak)
+      mpv.setStringToDefaultAsync(MPVOption.GPURendererOptions.toneMapping)
+      mpv.setStringToDefaultAsync(MPVOption.GPURendererOptions.toneMappingParam)
       return
     }
-    var targetPeak = "auto"
-    if Preference.bool(for: .enableToneMappingTargetPeakOverride) {
-      targetPeak = String(Preference.integer(for: .toneMappingTargetPeakOverride))
-    } else {
-      // In auto mode mpv will use the target display's peak brightness, if available. Otherwise
-      // mpv will apply an appropriate value based on the transfer characteristics of the display.
-      // However, mpv is currently missing code for querying the display under macOS. So IINA
-      // attempts to determine peak brightness of the display itself and only uses mpv auto mode
-      // if unable to obtain the display's brightness.
-      if let displayInfo = CoreDisplay_DisplayCreateInfoDictionary(currentDisplay!)?.takeRetainedValue()
-          as? [String: AnyObject] {
-        logHDR("Successfully obtained information about the display")
-        // Apple Silicon Macs use the key NonReferencePeakHDRLuminance.
-        if let hdrLuminance = displayInfo["NonReferencePeakHDRLuminance"] as? Int {
-          logHDR("Found NonReferencePeakHDRLuminance: \(hdrLuminance)")
-          targetPeak = String(hdrLuminance)
-        } else if let hdrLuminance = displayInfo["DisplayBacklight"] as? Int {
-          // Intel Macs use the key DisplayBacklight.
-          logHDR("Found DisplayBacklight: \(hdrLuminance)")
-          targetPeak = String(hdrLuminance)
-        } else {
-          logHDR("Didn't find NonReferencePeakHDRLuminance or DisplayBacklight, using mpv auto mode")
-          logHDR("Display info dictionary:" + displayInfo.toStringForLog(), level: .verbose)
-        }
-      } else {
-        logHDR("Unable to obtain display information, using mpv auto mode", level: .warning)
-      }
-    }
+    let overriddenPeak = Preference.bool(for: .enableToneMappingTargetPeakOverride)
+      ? String(Preference.integer(for: .toneMappingTargetPeakOverride)) : nil
     let algorithm = String(describing: Preference.enum(for: .toneMappingAlgorithm) as
                            Preference.ToneMappingAlgorithmOption)
     let param = {
       guard Preference.bool(for: .enableToneMappingParamOverride) else { return "default" }
       return String(Preference.double(for: .toneMappingParamOverride))
     }()
-    logHDR("Will enable tone mapping: target-peak=\(targetPeak) algorithm=\(algorithm) param=\(param)")
-    mpv.setString(MPVOption.GPURendererOptions.targetPeak, targetPeak)
-    mpv.setString(MPVOption.GPURendererOptions.toneMapping, algorithm)
-    mpv.setString(MPVOption.GPURendererOptions.toneMappingParam, param)
+    let subsystem = hdrSubsystem
+    mpv.inRequestOrder {
+      let targetPeak = overriddenPeak ?? VideoView.peakBrightness(of: displayId, subsystem: subsystem)
+      Logger.log("Will enable tone mapping: target-peak=\(targetPeak) algorithm=\(algorithm) param=\(param)",
+                 subsystem: subsystem)
+      mpv.setStringAsync(MPVOption.GPURendererOptions.targetPeak, targetPeak)
+      mpv.setStringAsync(MPVOption.GPURendererOptions.toneMapping, algorithm)
+      mpv.setStringAsync(MPVOption.GPURendererOptions.toneMappingParam, param)
+    }
   }
 
-  /// Set the mpv tone mapping options appropriately for a SDR video.
+  /// The peak brightness of the display `displayId` for the target-peak option, or `auto` when it cannot be found. It asks
+  /// CoreDisplay, so the main thread must not call it.
+  ///
+  /// In auto mode mpv will use the target display's peak brightness, if available. Otherwise mpv will apply an appropriate value
+  /// based on the transfer characteristics of the display. However, mpv is currently missing code for querying the display under
+  /// macOS. So IINA attempts to determine peak brightness of the display itself and only uses mpv auto mode if unable to obtain the
+  /// display's brightness.
+  private static func peakBrightness(of displayId: CGDirectDisplayID, subsystem: Logger.Subsystem) -> String {
+    func logHDR(_ message: String, level: Logger.Level = .debug) {
+      Logger.log(message, level: level, subsystem: subsystem)
+    }
+    guard let displayInfo = CoreDisplay_DisplayCreateInfoDictionary(displayId)?.takeRetainedValue()
+            as? [String: AnyObject] else {
+      logHDR("Unable to obtain display information, using mpv auto mode", level: .warning)
+      return "auto"
+    }
+    logHDR("Successfully obtained information about the display")
+    // Apple Silicon Macs use the key NonReferencePeakHDRLuminance.
+    if let hdrLuminance = displayInfo["NonReferencePeakHDRLuminance"] as? Int {
+      logHDR("Found NonReferencePeakHDRLuminance: \(hdrLuminance)")
+      return String(hdrLuminance)
+    } else if let hdrLuminance = displayInfo["DisplayBacklight"] as? Int {
+      // Intel Macs use the key DisplayBacklight.
+      logHDR("Found DisplayBacklight: \(hdrLuminance)")
+      return String(hdrLuminance)
+    }
+    logHDR("Didn't find NonReferencePeakHDRLuminance or DisplayBacklight, using mpv auto mode")
+    logHDR("Display info dictionary:" + displayInfo.toStringForLog(), level: .verbose)
+    return "auto"
+  }
+
+  /// Set the mpv tone mapping options appropriately for a SDR video, without waiting for `mpv`.
   ///
   /// If tone mapping is enabled then this method will set the following mpv options back to their default value (`auto`):
   /// - [target-peak](https://mpv.io/manual/stable/#options-target-peak)
@@ -628,15 +659,15 @@ extension VideoView {
     guard let mpv = player.mpv else { return }
     guard Preference.bool(for: .enableToneMapping) else {
       // Reset options to their defaults.
-      mpv.setStringToDefault(MPVOption.GPURendererOptions.targetPeak)
-      mpv.setStringToDefault(MPVOption.GPURendererOptions.toneMapping)
-      mpv.setStringToDefault(MPVOption.GPURendererOptions.toneMappingParam)
+      mpv.setStringToDefaultAsync(MPVOption.GPURendererOptions.targetPeak)
+      mpv.setStringToDefaultAsync(MPVOption.GPURendererOptions.toneMapping)
+      mpv.setStringToDefaultAsync(MPVOption.GPURendererOptions.toneMappingParam)
       return
     }
     logHDR("Will enable tone mapping: target-peak=auto algorithm=auto param=default")
-    mpv.setString(MPVOption.GPURendererOptions.targetPeak, "auto")
-    mpv.setString(MPVOption.GPURendererOptions.toneMapping, "auto")
-    mpv.setString(MPVOption.GPURendererOptions.toneMappingParam, "default")
+    mpv.setStringAsync(MPVOption.GPURendererOptions.targetPeak, "auto")
+    mpv.setStringAsync(MPVOption.GPURendererOptions.toneMapping, "auto")
+    mpv.setStringAsync(MPVOption.GPURendererOptions.toneMappingParam, "default")
   }
 
   // MARK: - Utils
