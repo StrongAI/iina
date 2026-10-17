@@ -21,13 +21,13 @@ import Foundation
 /// start of the log file. So this class also provides the version numbers.
 class MPVOptionDefaults {
   /// The `MPVDefaults` singleton object.
-  static let shared = MPVOptionDefaults()
+  static let shared = MPVOptionDefaults(configDir: nil)
 
   /// Version number of the libass library.
   ///
   /// The mpv libass version property returns an integer encoded as a hex binary-coded decimal.
   var libassVersion: String {
-    guard mpv != nil, let version = getPropertyAsInt(MPVProperty.libassVersion) else {
+    guard let version = getPropertyAsInt(MPVProperty.libassVersion) else {
       return "Unable to obtain libass version number"
     }
     let major = String(version >> 28 & 0xF, radix: 16)
@@ -38,19 +38,42 @@ class MPVOptionDefaults {
 
   /// Version number of the mpv library.
   var mpvVersion: String {
-    guard mpv != nil, let version = getPropertyAsString(MPVProperty.mpvVersion) else {
+    guard let version = getPropertyAsString(MPVProperty.mpvVersion) else {
       return "Unable to obtain mpv version number"
     }
     return version
   }
 
-  private let mpv: OpaquePointer?
+  /// The queue the mpv instance is created, configured and initialized on, so that the thread that makes this object does not wait
+  /// for mpv to start, and on which it is read, so that a read is answered once mpv has started.
+  private let queue = DispatchQueue(label: "com.colliderli.iina.MPVOptionDefaults")
 
-  private init() {
+  /// The mpv instance, set and read only on `queue`.
+  private var mpv: OpaquePointer?
+
+  /// Start the mpv instance on `queue`, returning without waiting for it.
+  /// - Parameter configDir: A folder whose `mpv.conf` the mpv instance reads as it initializes, or `nil` for none, as the shared object
+  ///     reads none.
+  init(configDir: String?) {
+    queue.async { [self] in start(configDir: configDir) }
+  }
+
+  deinit {
+    // The start holds this object until it is done, and each read is done before it returns, so nothing runs on the queue now.
+    guard mpv != nil else { return }
+    mpv_terminate_destroy(mpv)
+  }
+
+  /// Create, configure and initialize the mpv instance, on `queue`.
+  private func start(configDir: String?) {
     mpv = mpv_create()
     guard mpv != nil else {
       MPVOptionDefaults.log("Failed to create a mpv instance", level: .error)
       return
+    }
+    if let configDir {
+      logError(mpv_set_option_string(mpv, "config", "yes"))
+      logError(mpv_set_option_string(mpv, MPVOption.ProgramBehavior.configDir, configDir))
     }
     logError(mpv_set_option_string(mpv, MPVOption.ProgramBehavior.loadAutoProfiles, "no"))
     logError(mpv_set_option_string(mpv, MPVOption.ProgramBehavior.loadCommands, "no"))
@@ -87,11 +110,13 @@ class MPVOptionDefaults {
   }
 
   func getString(_ name: String) -> String? {
-    guard mpv != nil else { return nil }
-    let cstr = mpv_get_property_string(mpv, formPropertyName(name))
-    let str: String? = cstr == nil ? nil : String(cString: cstr!)
-    mpv_free(cstr)
-    return str
+    queue.sync {
+      guard mpv != nil else { return nil }
+      let cstr = mpv_get_property_string(mpv, formPropertyName(name))
+      let str: String? = cstr == nil ? nil : String(cString: cstr!)
+      mpv_free(cstr)
+      return str
+    }
   }
 
   // MARK: - Supporting Methods
@@ -110,24 +135,30 @@ class MPVOptionDefaults {
   ///   - data: Pointer to the variable that will holdErr the option value.
   /// - Returns: Error code, 0 and positive values mean success, negative values are always errors.
   private func getDefaultValue(_ name: String, _ format: mpv_format, _ data: UnsafeMutableRawPointer) -> Int32 {
-    guard mpv != nil else { return Int32.min }
-    return logError(mpv_get_property(mpv, formPropertyName(name), format, data))
+    queue.sync {
+      guard mpv != nil else { return Int32.min }
+      return logError(mpv_get_property(mpv, formPropertyName(name), format, data))
+    }
   }
 
   private func getPropertyAsInt(_ name: String) -> Int? {
-    guard mpv != nil else { return nil }
-    var data = Int64()
-    let errorCode = logError(mpv_get_property(mpv, name, MPV_FORMAT_INT64, &data))
-    guard errorCode >= 0 else { return nil }
-    return Int(data)
+    queue.sync {
+      guard mpv != nil else { return nil }
+      var data = Int64()
+      let errorCode = logError(mpv_get_property(mpv, name, MPV_FORMAT_INT64, &data))
+      guard errorCode >= 0 else { return nil }
+      return Int(data)
+    }
   }
 
   private func getPropertyAsString(_ name: String) -> String? {
-    guard mpv != nil else { return nil }
-    let cstr = mpv_get_property_string(mpv, name)
-    let str: String? = cstr == nil ? nil : String(cString: cstr!)
-    mpv_free(cstr)
-    return str
+    queue.sync {
+      guard mpv != nil else { return nil }
+      let cstr = mpv_get_property_string(mpv, name)
+      let str: String? = cstr == nil ? nil : String(cString: cstr!)
+      mpv_free(cstr)
+      return str
+    }
   }
 
   @discardableResult
