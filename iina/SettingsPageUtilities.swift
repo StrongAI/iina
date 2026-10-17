@@ -33,7 +33,7 @@ class SettingsPageUtilities: SettingsPage {
 
   private lazy var setAsDefaultSheet = SetAsDefaultSheetWindow()
   private lazy var browserExtensionView = BrowserExtensionView()
-  private lazy var thumbCacheSizeLabel: NSTextField = makeLabel()
+  lazy var thumbCacheSizeLabel: NSTextField = makeLabel()
 
   override func content() -> [SettingsSection] {
     return sections {
@@ -83,7 +83,10 @@ class SettingsPageUtilities: SettingsPage {
   }
 
   private func updateThumbnailCacheStat() {
-    thumbCacheSizeLabel.stringValue = "\(FloatingPointByteCountFormatter.string(fromByteCount: CacheManager.shared.getCacheSize(), countStyle: .binary))B"
+    // The cache folder is listed off the main thread.
+    CacheManager.shared.readCacheSize { [weak self] size in
+      self?.thumbCacheSizeLabel.stringValue = "\(FloatingPointByteCountFormatter.string(fromByteCount: size, countStyle: .binary))B"
+    }
   }
 
   override init () {

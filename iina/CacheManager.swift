@@ -26,6 +26,17 @@ class CacheManager {
     return cachedContents
   }
 
+  /// The serial queue the settings pages read the cache size on, so that the main thread does not wait for the file system.
+  static let queue = DispatchQueue(label: "IINACacheSize", qos: .userInitiated)
+
+  /// Read the cache size on `queue`, then hand it to `completion` on the main thread.
+  func readCacheSize(then completion: @escaping (Int) -> Void) {
+    CacheManager.queue.async {
+      let size = self.getCacheSize()
+      DispatchQueue.main.async { completion(size) }
+    }
+  }
+
   func getCacheSize() -> Int {
     return cacheFolderContents()?.reduce(0 as Int) { totalSize, url in
       let size = (try? url.resourceValues(forKeys: [.fileSizeKey]))?.fileSize ?? 0
