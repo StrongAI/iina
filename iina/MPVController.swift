@@ -1029,17 +1029,6 @@ class MPVController: NSObject {
     }
   }
 
-  @discardableResult
-  func setStringToDefault(_ name: String, level: Logger.Level = .debug) -> Int32 {
-    if let returnValue = madeBehindRawCommand({ setStringToDefault(name, level: level) }) { return returnValue }
-    guard let value = MPVOptionDefaults.shared.getString(name) else {
-      log("Failed to obtain default for option: \(name)", level: .error)
-      return MPV_ERROR_OPTION_NOT_FOUND.rawValue
-    }
-    log("Set property to default: \(name)=\(value)", level: level)
-    return mpv_set_property_string(mpv, name, value)
-  }
-
   /// Set the given option to its default value asynchronously, without waiting for `mpv`: the default is read from
   /// `MPVOptionDefaults` on `rawCommandQueue`, see `inRequestOrder`, and set there with `setStringAsync`.
   func setStringToDefaultAsync(_ name: String, level: Logger.Level = .debug) {
