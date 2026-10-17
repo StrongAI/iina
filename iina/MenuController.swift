@@ -610,13 +610,17 @@ class MenuController: NSObject, NSMenuDelegate {
   }
 
   func updateSavedFiltersMenu(type: String) {
-    let filters = PlayerCore.active.mpv.getFilters(type)
-    let menu: NSMenu! = type == MPVProperty.vf ? savedVideoFiltersMenu : savedAudioFiltersMenu
-    for item in menu.items {
-      if let string = (item.representedObject as? String), let asObject = MPVFilter(rawString: string) {
-        // Filters that support multiple parameters have more than one valid string representation.
-        // Must compare filters using their object representation.
-        item.state = filters.contains { $0 == asObject } ? .on : .off
+    // The filters are asked of mpv without waiting for it, and the items are ticked on the main thread once mpv answers.
+    PlayerCore.active.mpv.getFiltersAsync(type) { [self] filters in
+      DispatchQueue.main.async { [self] in
+        let menu: NSMenu! = type == MPVProperty.vf ? savedVideoFiltersMenu : savedAudioFiltersMenu
+        for item in menu.items {
+          if let string = (item.representedObject as? String), let asObject = MPVFilter(rawString: string) {
+            // Filters that support multiple parameters have more than one valid string representation.
+            // Must compare filters using their object representation.
+            item.state = filters.contains { $0 == asObject } ? .on : .off
+          }
+        }
       }
     }
   }

@@ -2354,7 +2354,8 @@ extension MPVController: FileEndPlayer {
   var pausesWhenOpened: Bool { Preference.bool(for: .pauseWhenOpen) }
 
   func pauseMpv() {
-    setFlag(MPVOption.PlaybackControl.pause, true, level: .verbose)
+    // Asked without waiting for mpv, which handles it right after any request made before it, before it carries on with playback.
+    setFlagAsync(MPVOption.PlaybackControl.pause, true, level: .verbose)
   }
 
   func cancelThumbnailGeneration() {
