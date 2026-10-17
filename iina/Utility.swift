@@ -527,6 +527,17 @@ class Utility {
   /// The serial queue the LaunchServices requests are made on, so that the main thread does not wait for them.
   static let workspaceQueue = DispatchQueue(label: "IINAWorkspace", qos: .userInitiated)
 
+  /// The queue a file the user asked to be removed is removed on, so that the main thread does not wait for the file system.
+  static let removalQueue = DispatchQueue(label: "IINAFileRemoval", qos: .userInitiated)
+
+  /// Remove the item at `url` on `removalQueue`, ignoring a failure, then call `completion` on the main thread.
+  static func removeItem(at url: URL, then completion: @escaping () -> Void = {}) {
+    removalQueue.async {
+      try? FileManager.default.removeItem(at: url)
+      DispatchQueue.main.async(execute: completion)
+    }
+  }
+
   /// Makes each LaunchServices request. It exists so that tests can record the requests in its place, checking what is asked without
   /// opening a browser, a Finder window or another app, or changing the default apps.
   static var makeWorkspaceRequest: (WorkspaceRequest) -> Bool = { $0.make() }

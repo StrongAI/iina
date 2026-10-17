@@ -46,7 +46,7 @@ class ScreenshootOSDView: NSViewController {
 
   @IBAction func deleteBtnAction(_ sender: Any) {
     guard let fileURL else { return }
-    try? FileManager.default.removeItem(at: fileURL)
+    Utility.removeItem(at: fileURL)
     PlayerCore.active.hideOSD()
   }
 
