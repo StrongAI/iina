@@ -738,8 +738,8 @@ class PlayerCore: NSObject {
       log("Set http_proxy to \(proxy)")
     }
 
-    mpv.mpvInit()
-    events.emit(.mpvInitialized)
+    // mpv starts without the calling thread waiting for it, and the plugins are told once it is initialized.
+    mpv.mpvInit { [self] in events.emit(.mpvInitialized) }
 
     checkConfiguredAudioDevice()
   }

@@ -367,10 +367,28 @@ class MPVController: NSObject {
   /**
    Init the mpv context, set options
    */
-  func mpvInit() {
+  func mpvInit(then started: @escaping () -> Void = {}) {
     // Create a new mpv instance and an associated client API handle to control the mpv instance.
     mpv = mpv_create()
 
+    // mpv starts in request order, see inRequestOrder, so that the calling thread does not wait for it to set its options and
+    // initialize, and the requests made after this are asked once it has. The player's state is set, and what is read only on the
+    // main thread is read, before it starts.
+    let useMpvOsd = Preference.bool(for: .enableAdvancedSettings) && Preference.bool(for: .useMpvOsd)
+    if useMpvOsd {
+      player.displayOSD = false
+    }
+    player.info.subEncoding = Preference.string(for: .defaultEncoding)
+    let inputConfPath = PlayerCore.inputConfPath
+    let hasYTDL = JavascriptPlugin.hasYTDL
+    inRequestOrder { [self] in
+      start(useMpvOsd: useMpvOsd, inputConfPath: inputConfPath, hasYTDL: hasYTDL)
+      DispatchQueue.main.async(execute: started)
+    }
+  }
+
+  /// Set `mpv`'s options and initialize it, on `rawCommandQueue`, see `mpvInit(then:)`.
+  private func start(useMpvOsd: Bool, inputConfPath: String?, hasYTDL: Bool) {
     // User default settings
 
     if Preference.bool(for: .enableInitialVolume) {
@@ -384,11 +402,8 @@ class MPVController: NSObject {
     // - Advanced
 
     // disable internal OSD
-    let useMpvOsd = Preference.bool(for: .enableAdvancedSettings) && Preference.bool(for: .useMpvOsd)
     if !useMpvOsd {
       chkErr(setOptionString(MPVOption.OSD.osdLevel, "0", level: .verbose))
-    } else {
-      player.displayOSD = false
     }
 
     // log
@@ -528,7 +543,6 @@ class MPVController: NSObject {
     chkErr(setOptionString(MPVOption.Subtitles.subAuto, "no", level: .verbose))
     chkErr(setOptionalOptionString(MPVOption.Subtitles.subCodepage,
                                    Preference.string(for: .defaultEncoding), verboseIfDefault: true))
-    player.info.subEncoding = Preference.string(for: .defaultEncoding)
 
     let subOverrideHandler: OptionObserverInfo.Transformer = { key in
       String(describing: Preference.enum(for: key) as Preference.SubOverrideLevel)
@@ -637,7 +651,9 @@ class MPVController: NSObject {
     setUserOption(PK.ytdlEnabled, type: .other, forName: MPVOption.ProgramBehavior.ytdl,
                   verboseIfDefault: true) { key in
       let v = Preference.bool(for: .ytdlEnabled)
-      if JavascriptPlugin.hasYTDL {
+      // The plugins are read on the main thread, where a preference change sets the option; while mpv starts on rawCommandQueue,
+      // whether a plugin provides youtube-dl is what was read before it started.
+      if Thread.isMainThread ? JavascriptPlugin.hasYTDL : hasYTDL {
         return "no"
       }
       return v ? "yes" : "no"
@@ -653,14 +669,17 @@ class MPVController: NSObject {
     }
 
     // Set user defined conf dir.
+    // mpv starts on rawCommandQueue, see mpvInit, and its alerts are shown on the main thread.
     if Preference.bool(for: .enableAdvancedSettings),
        Preference.bool(for: .useUserDefinedConfDir),
-       var userConfDir = Preference.string(for: .userDefinedConfDir) {
-      userConfDir = NSString(string: userConfDir).standardizingPath
+       let configDir = Preference.string(for: .userDefinedConfDir) {
+      let userConfDir = NSString(string: configDir).standardizingPath
       setOptionString("config", "yes")
       let status = setOptionString(MPVOption.ProgramBehavior.configDir, userConfDir)
       if status < 0 {
-        Utility.showAlert("extra_option.config_folder", arguments: [userConfDir], disableMenus: true)
+        DispatchQueue.main.async {
+          Utility.showAlert("extra_option.config_folder", arguments: [userConfDir], disableMenus: true)
+        }
       }
     }
 
@@ -672,14 +691,18 @@ class MPVController: NSObject {
           userOptions.forEach { op in
             let status = setOptionString(op[0], op[1])
             if status < 0 {
-              Utility.showAlert("extra_option.error", arguments:
-                                  [op[0], op[1], status], disableMenus: true)
+              DispatchQueue.main.async {
+                Utility.showAlert("extra_option.error", arguments:
+                                    [op[0], op[1], status], disableMenus: true)
+              }
             }
           }
           log("Set \(userOptions.count) user configured mpv option values")
         }
       } else {
-        Utility.showAlert("extra_option.cannot_read", disableMenus: true)
+        DispatchQueue.main.async {
+          Utility.showAlert("extra_option.cannot_read", disableMenus: true)
+        }
       }
     }
 
@@ -688,7 +711,7 @@ class MPVController: NSObject {
     // Load keybindings. This is still required for mpv to handle media keys or apple remote.
     // The input config is the one the key bindings were read from off the main thread, so that listing the configs does not wait
     // for the file system here. A player started before the key bindings have first been read gives mpv none.
-    chkErr(setOptionalOptionString(MPVOption.Input.inputConf, PlayerCore.inputConfPath, level: .verbose))
+    chkErr(setOptionalOptionString(MPVOption.Input.inputConf, inputConfPath, level: .verbose))
 
     // Receive log messages at warn level.
     chkErr(mpv_request_log_messages(mpv, MPVLogLevel))
@@ -702,9 +725,13 @@ class MPVController: NSObject {
       mpvController.readEvents()
       }, mutableRawPointerOf(obj: self))
 
-    // Observe properties.
-    observeProperties.forEach { (k, v) in
-      mpv_observe_property(mpv, 0, k, v)
+    // Observe properties, unless the observers were removed while this start was queued, as they are for a player quit at once;
+    // under the observers' lock, so that removeObservers and mpvQuit stop observing them after this.
+    $optionObservers.withLock { observers in
+      guard observers != nil else { return }
+      observeProperties.forEach { (k, v) in
+        mpv_observe_property(mpv, 0, k, v)
+      }
     }
 
     // Initialize an uninitialized mpv instance. If the mpv instance is already running, an error is returned.
@@ -859,8 +886,13 @@ class MPVController: NSObject {
 
   /// Remove observers for IINA preferences.
   private func removeOptionObservers() {
+    // Once they are removed none is added, though mpv's start, which adds them, may still be queued, see mpvInit.
+    guard let observers = $optionObservers.withLock({ observers in
+      defer { observers = nil }
+      return observers
+    }) else { return }
     ObjcUtils.silenced {
-      self.optionObservers.forEach { (k, _) in
+      observers.forEach { (k, _) in
         UserDefaults.standard.removeObserver(self, forKeyPath: k)
       }
     }
@@ -2014,7 +2046,9 @@ class MPVController: NSObject {
     }
   }
 
-  private var optionObservers: [String: [OptionObserverInfo]] = [:]
+  /// The preferences observed for the options they set, added while `mpv` starts on `rawCommandQueue` and read on the thread a
+  /// preference changes on; `nil` once they are removed, after which none is added and `mpv`'s properties are not observed.
+  @Atomic private var optionObservers: [String: [OptionObserverInfo]]? = [:]
 
   private func setOptionFlag(_ name: String, _ flag: Bool, level: Logger.Level = .debug,
                              verboseIfDefault: Bool = false) -> Int32 {
@@ -2138,16 +2172,20 @@ class MPVController: NSObject {
     }
 
     if code < 0 {
-      Utility.showAlert("mpv_error", arguments: [String(cString: mpv_error_string(code)), "\(code)", name],
-                        disableMenus: true)
+      // The options are set on rawCommandQueue while mpv starts, see mpvInit, and the alert is shown on the main thread.
+      let error = String(cString: mpv_error_string(code))
+      DispatchQueue.main.async {
+        Utility.showAlert("mpv_error", arguments: [error, "\(code)", name], disableMenus: true)
+      }
     }
 
     if sync {
-      UserDefaults.standard.addObserver(self, forKeyPath: keyRawValue, options: [.new, .old], context: nil)
-      if optionObservers[keyRawValue] == nil {
-        optionObservers[keyRawValue] = []
+      // The observer is added under the lock removeOptionObservers takes, so that none is added once they are removed.
+      $optionObservers.withLock { observers in
+        guard observers != nil else { return }
+        UserDefaults.standard.addObserver(self, forKeyPath: keyRawValue, options: [.new, .old], context: nil)
+        observers![keyRawValue, default: []].append(OptionObserverInfo(key, name, type, transformer))
       }
-      optionObservers[keyRawValue]!.append(OptionObserverInfo(key, name, type, transformer))
     }
   }
 
@@ -2155,7 +2193,7 @@ class MPVController: NSObject {
     guard !(change?[NSKeyValueChangeKey.oldKey] is NSNull) else { return }
 
     guard let keyPath else { return }
-    guard let infos = optionObservers[keyPath] else { return }
+    guard let infos = $optionObservers.withLock({ $0?[keyPath] }) else { return }
 
     // The options are set without waiting for mpv.
     for info in infos {
