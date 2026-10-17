@@ -607,19 +607,25 @@ extension PrefPluginViewController: WKScriptMessageHandler {
         } else if let v = plugin.defaultPreferences[prefName] {
           value = v
         }
-        let result: String
-        if let value = value {
-          if JSONSerialization.isValidJSONObject(value), let json = try? String(data: JSONSerialization.data(withJSONObject: value, options: []), encoding: .utf8) {
-            result = json
-          } else if value is String {
-            result = "\"\(value)\""
+        // The value is serialized on the plugins' preferences queue, so that the main thread does not wait for it, then handed to
+        // the page on the main thread.
+        JavascriptPlugin.preferencesQueue.async { [self, value] in
+          let result: String
+          if let value = value {
+            if JSONSerialization.isValidJSONObject(value), let json = try? String(data: JSONSerialization.data(withJSONObject: value, options: []), encoding: .utf8) {
+              result = json
+            } else if value is String {
+              result = "\"\(value)\""
+            } else {
+              result = "\(value)"
+            }
           } else {
-            result = "\(value)"
+            result = "null"
           }
-        } else {
-          result = "null"
+          DispatchQueue.main.async { [self] in
+            pluginPreferencesWebView.evaluateJavaScript("window.iina._call(\(data[1]), \(result))")
+          }
         }
-        pluginPreferencesWebView.evaluateJavaScript("window.iina._call(\(data[1]), \(result))")
       }
     } else if name == "error" {
       Logger.log("JS:\(plugin.name) Preference page \(data[0]) \(data[2]),\(data[3]): \(data[4])")
