@@ -65,7 +65,8 @@ class AboutWindowController: NSWindowController {
     let (version, build) = InfoDictionary.shared.version
     versionLabel.stringValue = "\(version) Build \(build)"
 
-    mpvVersionLabel.stringValue = MPVOptionDefaults.shared.mpvVersion
+    // The mpv version is read without waiting for the defaults' mpv to start, and shown once it is read.
+    MPVOptionDefaults.shared.versions { [weak self] mpvVersion, _ in self?.mpvVersionLabel.stringValue = mpvVersion }
     ffmpegVersionLabel.stringValue = "FFmpeg \(String(cString: av_version_info()))"
 
     // Use a localized date for the build date.

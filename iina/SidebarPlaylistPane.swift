@@ -534,21 +534,27 @@ extension SidebarPlaylistPane: NSMenuDelegate, NSMenuItemValidation {
 
   @IBAction func contextMenuPlayNext(_ sender: NSMenuItem) {
     guard let selectedRows else { return }
-    let current = player.mpv.getInt(MPVProperty.playlistPos)
-    var ob = 0  // index offset before current playing item
-    var mc = 1  // moved item count, +1 because move to next item of current played one
-    for item in selectedRows {
-      if item == current { continue }
-      if item < current {
-        player.playlistMove(item + ob, to: current + mc + ob)
-        ob -= 1
-      } else {
-        player.playlistMove(item, to: current + mc + ob)
+    // The playing entry is asked of mpv without waiting for it, and the entries are moved on the main thread once mpv answers, mpv
+    // making the moves after the read in the order they are asked.
+    player.mpv.getNodesAsync([MPVProperty.playlistPos]) { [self] values in
+      guard let current = (values[0] as? Int64).map(Int.init) else { return }
+      DispatchQueue.main.async { [self] in
+        var ob = 0  // index offset before current playing item
+        var mc = 1  // moved item count, +1 because move to next item of current played one
+        for item in selectedRows {
+          if item == current { continue }
+          if item < current {
+            player.playlistMove(item + ob, to: current + mc + ob)
+            ob -= 1
+          } else {
+            player.playlistMove(item, to: current + mc + ob)
+          }
+          mc += 1
+        }
+        tableView.deselectAll(nil)
+        player.postNotification(.iinaPlaylistChanged)
       }
-      mc += 1
     }
-    tableView.deselectAll(nil)
-    player.postNotification(.iinaPlaylistChanged)
   }
 
   @IBAction func contextMenuPlayInNewWindow(_ sender: NSMenuItem) {

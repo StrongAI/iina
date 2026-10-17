@@ -129,11 +129,16 @@ class JavascriptAPICore: JavascriptAPI, JavascriptAPICoreExportable {
 
   func getVersion() -> Any {
     let (iinaVersion, build) = InfoDictionary.shared.version
-    return [
-      "iina": iinaVersion,
-      "build": build,
-      "mpv": MPVOptionDefaults.shared.mpvVersion
-    ]
+    // The mpv version is read without waiting for the defaults' mpv to start, and the promise settles on the main thread once it is.
+    return createPromise { resolve, _ in
+      MPVOptionDefaults.shared.versions { mpvVersion, _ in
+        resolve.call(withArguments: [[
+          "iina": iinaVersion,
+          "build": build,
+          "mpv": mpvVersion
+        ]])
+      }
+    }
   }
 }
 

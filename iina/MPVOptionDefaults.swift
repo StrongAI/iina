@@ -23,10 +23,10 @@ class MPVOptionDefaults {
   /// The `MPVDefaults` singleton object.
   static let shared = MPVOptionDefaults(configDir: nil)
 
-  /// Version number of the libass library.
+  /// Version number of the libass library, read on `queue`.
   ///
   /// The mpv libass version property returns an integer encoded as a hex binary-coded decimal.
-  var libassVersion: String {
+  private var libassVersion: String {
     guard let version = getPropertyAsInt(MPVProperty.libassVersion) else {
       return "Unable to obtain libass version number"
     }
@@ -36,17 +36,26 @@ class MPVOptionDefaults {
     return "\(major).\(minor).\(patch)"
   }
 
-  /// Version number of the mpv library.
-  var mpvVersion: String {
+  /// Version number of the mpv library, read on `queue`.
+  private var mpvVersion: String {
     guard let version = getPropertyAsString(MPVProperty.mpvVersion) else {
       return "Unable to obtain mpv version number"
     }
     return version
   }
 
+  /// Answer the version numbers of the mpv and libass libraries on the main thread once mpv has started, without the calling thread
+  /// waiting for it.
+  func versions(then reply: @escaping (_ mpv: String, _ libass: String) -> Void) {
+    queue.async { [self] in
+      let mpv = mpvVersion, libass = libassVersion
+      DispatchQueue.main.async { reply(mpv, libass) }
+    }
+  }
+
   /// The queue the mpv instance is created, configured and initialized on, so that the thread that makes this object does not wait
-  /// for mpv to start, and on which it is read, so that a read is answered once mpv has started.
-  private let queue = DispatchQueue(label: "com.colliderli.iina.MPVOptionDefaults")
+  /// for mpv to start, and on which it is read, so that a read is answered once mpv has started. Tests hold it to hold the reads.
+  let queue = DispatchQueue(label: "com.colliderli.iina.MPVOptionDefaults")
 
   /// The mpv instance, set and read only on `queue`.
   private var mpv: OpaquePointer?
@@ -141,24 +150,22 @@ class MPVOptionDefaults {
     }
   }
 
+  /// Read the given property as an integer, on `queue`.
   private func getPropertyAsInt(_ name: String) -> Int? {
-    queue.sync {
-      guard mpv != nil else { return nil }
-      var data = Int64()
-      let errorCode = logError(mpv_get_property(mpv, name, MPV_FORMAT_INT64, &data))
-      guard errorCode >= 0 else { return nil }
-      return Int(data)
-    }
+    guard mpv != nil else { return nil }
+    var data = Int64()
+    let errorCode = logError(mpv_get_property(mpv, name, MPV_FORMAT_INT64, &data))
+    guard errorCode >= 0 else { return nil }
+    return Int(data)
   }
 
+  /// Read the given property as a string, on `queue`.
   private func getPropertyAsString(_ name: String) -> String? {
-    queue.sync {
-      guard mpv != nil else { return nil }
-      let cstr = mpv_get_property_string(mpv, name)
-      let str: String? = cstr == nil ? nil : String(cString: cstr!)
-      mpv_free(cstr)
-      return str
-    }
+    guard mpv != nil else { return nil }
+    let cstr = mpv_get_property_string(mpv, name)
+    let str: String? = cstr == nil ? nil : String(cString: cstr!)
+    mpv_free(cstr)
+    return str
   }
 
   @discardableResult
