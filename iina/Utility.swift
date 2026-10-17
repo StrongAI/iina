@@ -538,6 +538,21 @@ class Utility {
     }
   }
 
+  /// Remove the folder at `url` and make it again, empty, on `removalQueue`, then call `completion` on the main thread with the error
+  /// removing the folder threw, if any.
+  static func emptyFolder(at url: URL, then completion: @escaping (Error?) -> Void = { _ in }) {
+    removalQueue.async {
+      var thrown: Error?
+      do {
+        try FileManager.default.removeItem(at: url)
+      } catch {
+        thrown = error
+      }
+      createDirIfNotExist(url: url)
+      DispatchQueue.main.async { completion(thrown) }
+    }
+  }
+
   /// Makes each LaunchServices request. It exists so that tests can record the requests in its place, checking what is asked without
   /// opening a browser, a Finder window or another app, or changing the default apps.
   static var makeWorkspaceRequest: (WorkspaceRequest) -> Bool = { $0.make() }

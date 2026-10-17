@@ -141,28 +141,32 @@ class PrefUtilsViewController: PreferenceViewController, PreferenceWindowEmbedda
   @IBAction func clearWatchLaterBtnAction(_ sender: Any) {
     Utility.quickAskPanel("clear_watch_later", sheetWindow: view.window) { respond in
       guard respond == .alertFirstButtonReturn else { return }
-      try? FileManager.default.removeItem(atPath: Utility.watchLaterURL.path)
-      Utility.createDirIfNotExist(url: Utility.watchLaterURL)
-      self.savedPlaybackProgressClearedLabel.isHidden = false
+      // The folder is removed off the main thread.
+      Utility.emptyFolder(at: Utility.watchLaterURL) { _ in
+        self.savedPlaybackProgressClearedLabel.isHidden = false
+      }
     }
   }
 
   @IBAction func clearHistoryBtnAction(_ sender: Any) {
     Utility.quickAskPanel("clear_history", sheetWindow: view.window) { respond in
       guard respond == .alertFirstButtonReturn else { return }
-      try? FileManager.default.removeItem(atPath: Utility.playbackHistoryURL.path)
-      AppDelegate.shared.clearRecentDocuments(self)
-      Preference.set(nil, for: .iinaLastPlayedFilePath)
-      self.playHistoryClearedLabel.isHidden = false
+      // The file is removed off the main thread.
+      Utility.removeItem(at: Utility.playbackHistoryURL) {
+        AppDelegate.shared.clearRecentDocuments(self)
+        Preference.set(nil, for: .iinaLastPlayedFilePath)
+        self.playHistoryClearedLabel.isHidden = false
+      }
     }
   }
 
   @IBAction func clearCacheBtnAction(_ sender: Any) {
     Utility.quickAskPanel("clear_cache", sheetWindow: view.window) { respond in
       guard respond == .alertFirstButtonReturn else { return }
-      try? FileManager.default.removeItem(atPath: Utility.thumbnailCacheURL.path)
-      Utility.createDirIfNotExist(url: Utility.thumbnailCacheURL)
-      self.updateThumbnailCacheStat()
+      // The folder is removed off the main thread.
+      Utility.emptyFolder(at: Utility.thumbnailCacheURL) { _ in
+        self.updateThumbnailCacheStat()
+      }
     }
   }
 

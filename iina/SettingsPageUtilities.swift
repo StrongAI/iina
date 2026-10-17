@@ -116,12 +116,13 @@ class SettingsPageUtilities: SettingsPage {
     guard let window = (sender as? NSView)?.window else { return }
     Utility.quickAskPanel("clear_watch_later", sheetWindow: window) { respond in
       guard respond == .alertFirstButtonReturn else { return }
-      do {
-        try FileManager.default.removeItem(atPath: Utility.watchLaterURL.path)
-        Utility.createDirIfNotExist(url: Utility.watchLaterURL)
-        Utility.showAlert("cleared", style: .informational, sheetWindow: window)
-      } catch {
-        Utility.showAlert("custom", arguments: ["\(error)"], style: .critical, sheetWindow: window)
+      // The folder is removed off the main thread.
+      Utility.emptyFolder(at: Utility.watchLaterURL) { error in
+        if let error {
+          Utility.showAlert("custom", arguments: ["\(error)"], style: .critical, sheetWindow: window)
+        } else {
+          Utility.showAlert("cleared", style: .informational, sheetWindow: window)
+        }
       }
     }
   }
@@ -130,10 +131,12 @@ class SettingsPageUtilities: SettingsPage {
     guard let window = (sender as? NSView)?.window else { return }
     Utility.quickAskPanel("clear_history", sheetWindow: window) { respond in
       guard respond == .alertFirstButtonReturn else { return }
-      try? FileManager.default.removeItem(atPath: Utility.playbackHistoryURL.path)
-      AppDelegate.shared.clearRecentDocuments(self)
-      Preference.set(nil, for: .iinaLastPlayedFilePath)
-      Utility.showAlert("cleared", style: .informational, sheetWindow: window)
+      // The file is removed off the main thread.
+      Utility.removeItem(at: Utility.playbackHistoryURL) {
+        AppDelegate.shared.clearRecentDocuments(self)
+        Preference.set(nil, for: .iinaLastPlayedFilePath)
+        Utility.showAlert("cleared", style: .informational, sheetWindow: window)
+      }
     }
   }
 
@@ -141,8 +144,9 @@ class SettingsPageUtilities: SettingsPage {
     guard let window = (sender as? NSView)?.window else { return }
     Utility.quickAskPanel("clear_cache", sheetWindow: window) { respond in
       guard respond == .alertFirstButtonReturn else { return }
-      ThumbnailCache.clearThumbnailCache()
-      self.updateThumbnailCacheStat()
+      ThumbnailCache.clearThumbnailCache {
+        self.updateThumbnailCacheStat()
+      }
     }
   }
 }

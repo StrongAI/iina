@@ -188,9 +188,9 @@ class ThumbnailCache {
     return result
   }
 
-  static func clearThumbnailCache() {
-    try? FileManager.default.removeItem(atPath: Utility.thumbnailCacheURL.path)
-    Utility.createDirIfNotExist(url: Utility.thumbnailCacheURL)
+  static func clearThumbnailCache(then completion: @escaping () -> Void = {}) {
+    // The folder is removed off the main thread.
+    Utility.emptyFolder(at: Utility.thumbnailCacheURL) { _ in completion() }
   }
 
   private static func deleteCacheFile(at pathURL: URL) {
