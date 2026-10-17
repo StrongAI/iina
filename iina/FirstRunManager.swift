@@ -22,6 +22,8 @@ class FirstRunManager {
     }
   }
 
+  /// Whether the flag file of `key` is not in the Application Support folder. When it is not, it is written on
+  /// `Utility.folderQueue`, after the app's folders are made.
   static func isFirstRun(for key: Key) -> Bool {
     let filename = ".\(key.rawValue)"
     let fileURL = Utility.appSupportDirUrl.appendingPathComponent(filename, isDirectory: false)
@@ -29,14 +31,19 @@ class FirstRunManager {
     if exists {
       return false
     } else {
-      FileManager.default.createFile(atPath: fileURL.path, contents: nil, attributes: nil)
+      Utility.folderQueue.async {
+        FileManager.default.createFile(atPath: fileURL.path, contents: nil, attributes: nil)
+      }
       return true
     }
   }
 
+  /// Remove the flag file of `key` on `Utility.folderQueue`, after it is written.
   static func unsetFirstRun(for key: Key) {
     let filename = ".\(key.rawValue)"
     let fileURL = Utility.appSupportDirUrl.appendingPathComponent(filename, isDirectory: false)
-    try? FileManager.default.removeItem(at: fileURL)
+    Utility.folderQueue.async {
+      try? FileManager.default.removeItem(at: fileURL)
+    }
   }
 }

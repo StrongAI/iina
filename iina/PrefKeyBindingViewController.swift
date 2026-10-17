@@ -49,9 +49,11 @@ class PrefKeyBindingViewController: PreferenceViewController, PreferenceWindowEm
     return configs
   }()
 
-  /// The files of the user's input configs, by name, listed from the user's input config folder. Read only by `listConfigs`.
+  /// The files of the user's input configs, by name, listed from the user's input config folder, which is made first unless it
+  /// exists. Read only by `listConfigs`.
   private static var userConfigs: [String: String] {
     do {
+      Utility.createDirIfNotExist(url: Utility.userInputConfDirURL)
       let files = try fm.contentsOfDirectory(at: Utility.userInputConfDirURL, includingPropertiesForKeys: nil)
       let configFiles = files.filter { $0.pathExtension == "conf" }
       return Dictionary(uniqueKeysWithValues: configFiles.map { ($0.deletingPathExtension().lastPathComponent, $0.path) })

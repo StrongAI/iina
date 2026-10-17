@@ -194,6 +194,8 @@ class JavascriptPlugin: NSObject {
     }
 
     installQueue.async {
+      // The plugins folder is made here unless it exists, ahead of the installs that move plugins into it on this queue.
+      Utility.createDirIfNotExist(url: Utility.pluginsURL)
       guard let contents = try?
         FileManager.default.contentsOfDirectory(at: Utility.pluginsURL,
                                                 includingPropertiesForKeys: [.isDirectoryKey],

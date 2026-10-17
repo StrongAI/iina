@@ -418,37 +418,35 @@ class Utility {
     return allTypes.first { supportedFileExt[$0]!.contains(ext.lowercased()) }
   }
 
+  // The URLs of the app's folders are made without the file system, so that the thread that first reads one does not wait for it;
+  // `makeFolders(then:)` makes the folders.
+
   static let appSupportDirUrl: URL = {
     // get path
     let asPath = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)
     Logger.ensure(asPath.count >= 1, "Cannot get path to Application Support directory")
     let bundleID = Bundle.main.bundleIdentifier!
     let appAsUrl = asPath.first!.appendingPathComponent(bundleID)
-    createDirIfNotExist(url: appAsUrl)
     return appAsUrl
   }()
 
   static let userInputConfDirURL: URL = {
     let url = Utility.appSupportDirUrl.appendingPathComponent(AppData.userInputConfFolder, isDirectory: true)
-    createDirIfNotExist(url: url)
     return url
   }()
 
   static let watchLaterURL: URL = {
     let url = Utility.appSupportDirUrl.appendingPathComponent(AppData.watchLaterFolder, isDirectory: true)
-    createDirIfNotExist(url: url)
     return url
   }()
 
   static let pluginsURL: URL = {
     let url = Utility.appSupportDirUrl.appendingPathComponent(AppData.pluginsFolder, isDirectory: true)
-    createDirIfNotExist(url: url)
     return url
   }()
 
   static let binariesURL: URL = {
     let url = Utility.appSupportDirUrl.appendingPathComponent(AppData.binariesFolder, isDirectory: true)
-    createDirIfNotExist(url: url)
     return url
   }()
 
@@ -462,13 +460,11 @@ class Utility {
 
   static let thumbnailCacheURL: URL = {
     let appThumbnailCacheUrl = cacheURL.appendingPathComponent(AppData.thumbnailCacheFolder, isDirectory: true)
-    createDirIfNotExist(url: appThumbnailCacheUrl)
     return appThumbnailCacheUrl
   }()
 
   static let screenshotCacheURL: URL = {
     let url = cacheURL.appendingPathComponent(AppData.screenshotCacheFolder, isDirectory: true)
-    createDirIfNotExist(url: url)
     return url
   }()
 
@@ -478,7 +474,24 @@ class Utility {
 
   static let tempDirURL: URL = URL(fileURLWithPath: NSTemporaryDirectory(), isDirectory: true)
 
-  static let exeDirURL: URL = URL(fileURLWithPath: Bundle.main.executablePath!).deletingLastPathComponent()
+  /// Made without asking the file system whether the executable is a folder, so that the thread that first reads it does not
+  /// wait.
+  static let exeDirURL: URL = URL(fileURLWithPath: Bundle.main.executablePath!, isDirectory: false).deletingLastPathComponent()
+
+  /// The queue the app's folders are made on, so that the main thread does not wait for the file system. The first-run flags
+  /// `FirstRunManager` keeps in the Application Support folder are written and removed on it too, after the folders are made.
+  static let folderQueue = DispatchQueue(label: "IINAFolders", qos: .userInitiated)
+
+  /// Make each of the app's folders that does not exist on `folderQueue`, then call `completion` on the main thread. The app does
+  /// this as it starts to launch, ahead of the work that writes in the folders.
+  static func makeFolders(then completion: @escaping () -> Void = {}) {
+    folderQueue.async {
+      let folders = [appSupportDirUrl, userInputConfDirURL, watchLaterURL, pluginsURL, binariesURL, thumbnailCacheURL,
+                     screenshotCacheURL]
+      folders.forEach { createDirIfNotExist(url: $0) }
+      DispatchQueue.main.async(execute: completion)
+    }
+  }
 
 
   // MARK: - LaunchServices

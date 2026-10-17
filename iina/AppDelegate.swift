@@ -201,6 +201,11 @@ class AppDelegate: NSObject, NSApplicationDelegate, SPUUpdaterDelegate {
   // MARK: - App Delegate
 
   func applicationWillFinishLaunching(_ notification: Notification) {
+    // The app's folders are made first, on the folder queue, so that the main thread does not wait for the file system. The
+    // first-run flags are written on that queue after them, and the plugins and input configs folders are made where they are
+    // read.
+    Utility.makeFolders()
+
     // Must setup preferences before logging so log level is set correctly.
     registerUserDefaultValues()
 
