@@ -71,6 +71,8 @@ class FilterWindowController: NSWindowController, NSWindowDelegate {
     splitView.setPosition(splitView.frame.height - 140, ofDividerAt: 0)
 
     savedFilters = (Preference.array(for: filterType == MPVProperty.af ? .savedAudioFilters : .savedVideoFilters) ?? []).compactMap(SavedFilter.init(dict:))
+    // The saved filters are listed at once; which of them mpv has is marked once it answers.
+    savedFiltersTableView.reloadData()
     loadFilters(of: PlayerCore.lastActive)
 
     keyRecordView.delegate = self
