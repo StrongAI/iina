@@ -1145,39 +1145,44 @@ class AppDelegate: NSObject, NSApplicationDelegate, SPUUpdaterDelegate {
 
   /// Dump contents of all player cores to a txt file. Strictly for debugging. No localization needed.
   @IBAction func dumpDebugInfo(_ sender: AnyObject) {
-    struct FileStream: TextOutputStream {
-      let handle: FileHandle
-      mutating func write(_ string: String) {
-        handle.write(Data(string.utf8))
-      }
-    }
-
-    let alert = NSAlert()
     let path = NSString(string: "~/Downloads/iina-debug-dump-\(Date.timeIntervalSinceReferenceDate).txt").expandingTildeInPath
-    let url = URL(fileURLWithPath: path)
-    FileManager.default.createFile(atPath: path, contents: nil)
-    guard let handle = try? FileHandle(forWritingTo: url) else {
-      alert.messageText = "Error"
-      alert.informativeText = "Cannot get file handle at \(path)."
-      alert.alertStyle = .critical
+    AppDelegate.writeDebugDump(to: path) { written in
+      let alert = NSAlert()
+      guard written else {
+        alert.messageText = "Error"
+        alert.informativeText = "Cannot get file handle at \(path)."
+        alert.alertStyle = .critical
+        alert.runModal()
+        return
+      }
+      alert.messageText = "Completed"
+      alert.informativeText = """
+        Dumped debug info to \(path).\n
+        The file contains filenames and URLs in your playlist! \
+        For your privacy, please consider removing them before sharing.
+        """
+      alert.alertStyle = .informational
       alert.runModal()
-      return
     }
+  }
 
-    var stream = FileStream(handle: handle)
+  /// Dump every player on the main thread, where their state is read, then create the file at `path` and write the dump to it on
+  /// `Utility.folderQueue`, so that the main thread does not wait for the file system, and call `completion` on the main thread with
+  /// whether the file could be opened.
+  static func writeDebugDump(to path: String, then completion: @escaping (Bool) -> Void) {
+    var dumped = ""
     for player in PlayerCore.playerCores {
-      dump(player, to: &stream)
-      stream.write("\n\n")
+      dump(player, to: &dumped)
+      dumped += "\n\n"
     }
-
-    alert.messageText = "Completed"
-    alert.informativeText = """
-      Dumped debug info to \(path).\n
-      The file contains filenames and URLs in your playlist! \
-      For your privacy, please consider removing them before sharing.
-      """
-    alert.alertStyle = .informational
-    alert.runModal()
+    Utility.folderQueue.async {
+      FileManager.default.createFile(atPath: path, contents: nil)
+      let handle = try? FileHandle(forWritingTo: URL(fileURLWithPath: path))
+      handle?.write(Data(dumped.utf8))
+      try? handle?.close()
+      let written = handle != nil
+      DispatchQueue.main.async { completion(written) }
+    }
   }
 
   private func registerUserDefaultValues() {
