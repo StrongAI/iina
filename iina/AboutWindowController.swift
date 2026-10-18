@@ -53,6 +53,16 @@ class AboutWindowController: NSWindowController {
 
   private lazy var contributors = getContributors()
 
+  /// The queue the window's contribution and credits texts are read on, so that the main thread does not wait for the file system.
+  static let queue = DispatchQueue(label: "IINAAboutWindowController", qos: .userInitiated)
+
+  /// The text of the RTF file `name` in the app bundle, or `nil` if it cannot be read.
+  static func readText(_ name: String) -> NSAttributedString? {
+    guard let url = Bundle.main.url(forResource: name, withExtension: "rtf") else { return nil }
+    return try? NSAttributedString(url: url, options: [.documentType: NSAttributedString.DocumentType.rtf],
+                                   documentAttributes: nil)
+  }
+
   override func windowDidLoad() {
     super.windowDidLoad()
 
@@ -98,14 +108,17 @@ class AboutWindowController: NSWindowController {
       break
     }
 
-    if let contributionFile = Bundle.main.path(forResource: "Contribution", ofType: "rtf") {
-      detailTextView.readRTFD(fromFile: contributionFile)
-      detailTextView.textColor = NSColor.secondaryLabelColor
-    }
-
-    if let creditsFile = Bundle.main.path(forResource: "Credits", ofType: "rtf") {
-      creditsTextView.readRTFD(fromFile: creditsFile)
-      creditsTextView.textColor = NSColor.secondaryLabelColor
+    // The contribution and credits texts are read off the main thread and shown once they are read.
+    Self.queue.async {
+      let (contribution, credits) = (Self.readText("Contribution"), Self.readText("Credits"))
+      DispatchQueue.main.async { [weak self] in
+        guard let self else { return }
+        for (textView, text) in [(detailTextView, contribution), (creditsTextView, credits)] {
+          guard let textView, let text else { continue }
+          textView.textStorage?.setAttributedString(text)
+          textView.textColor = NSColor.secondaryLabelColor
+        }
+      }
     }
 
     contributorsCollectionView.dataSource = self
