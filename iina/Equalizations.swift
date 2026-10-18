@@ -17,11 +17,49 @@ class EQProfile: Codable {
     gains = sliders.map { $0.doubleValue }
   }
 
-  static var userEQs: Dictionary<String, EQProfile> = loadUserEQs() {
+  /// The queue the user's presets are decoded and stored on, so that the main thread does not wait for the coding.
+  static let queue = DispatchQueue(label: "IINAEQProfile", qos: .userInitiated)
+
+  /// The user's presets, once `load(then:)` has decoded them on `queue`, and empty until then. Read and set on the main thread; a
+  /// change made once they are loaded is stored in the preferences on `queue`.
+  static var userEQs: Dictionary<String, EQProfile> = [:] {
     didSet {
-      let encoder = JSONEncoder()
-      if let encoded = try? encoder.encode(userEQs) {
-        UserDefaults.standard.set(encoded, forKey: Preference.Key.userEQPresets.rawValue)
+      guard isLoaded else { return }
+      let eqs = userEQs
+      queue.async {
+        if let encoded = try? JSONEncoder().encode(eqs) {
+          UserDefaults.standard.set(encoded, forKey: Preference.Key.userEQPresets.rawValue)
+        }
+      }
+    }
+  }
+
+  /// Whether `userEQs` holds the stored presets. Read and set on the main thread; a test clears it to have them decoded again.
+  static var isLoaded = false
+
+  /// The callers to tell on the main thread once the presets being decoded have been decoded, `nil` while they are not being decoded.
+  private static var whenLoaded: [() -> Void]?
+
+  /// Decode the presets on `queue` unless they have been, then call `completion` on the main thread once they have been, after the
+  /// completions asked for before it.
+  static func load(then completion: @escaping () -> Void) {
+    guard !isLoaded else {
+      DispatchQueue.main.async(execute: completion)
+      return
+    }
+    guard whenLoaded == nil else {
+      whenLoaded?.append(completion)
+      return
+    }
+    whenLoaded = [completion]
+    queue.async {
+      let eqs = loadUserEQs()
+      DispatchQueue.main.async {
+        userEQs = eqs
+        isLoaded = true
+        let completions = whenLoaded ?? []
+        whenLoaded = nil
+        completions.forEach { $0() }
       }
     }
   }

@@ -324,6 +324,11 @@ fileprivate class EqualizerView: NSView, NSMenuDelegate {
   }
 
   @objc func eqPopUpButtonAction(_ sender: NSPopUpButton) {
+    // The user's presets are decoded off the main thread; an action on them is taken once they are.
+    guard EQProfile.isLoaded else {
+      EQProfile.load { [weak self] in self?.eqPopUpButtonAction(sender) }
+      return
+    }
     let tag = sender.selectedTag()
     let name = sender.titleOfSelectedItem
     let representedObject = sender.selectedItem?.representedObject as? String
@@ -366,6 +371,10 @@ fileprivate class EqualizerView: NSView, NSMenuDelegate {
   }
 
   func menuNeedsUpdate(_ menu: NSMenu) {
+    if !EQProfile.isLoaded {
+      // The user's presets are decoded off the main thread and listed once they are.
+      EQProfile.load { [weak self] in self?.menuNeedsUpdate(menu) }
+    }
     let tag = eqPopUpButton.selectedTag()
     let saveItem = menu.item(withTag: eqSaveMenuItemTag)!
     let editingItems = [menu.item(withTag: eqRenameMenuItemTag)!, menu.item(withTag: eqDeleteMenuItemTag)!]
