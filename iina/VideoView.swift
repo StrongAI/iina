@@ -14,6 +14,10 @@ class VideoView: NSView {
   weak var player: PlayerCore!
   var link: CVDisplayLink?
 
+  /// Serial queue the display link is started and stopped on, in the order they are asked for, so that the main thread does not wait
+  /// for `CVDisplayLinkStop`, which waits for a callback in progress to return.
+  private let displayLinkQueue = DispatchQueue(label: "com.colliderli.iina.displayLink", qos: .userInteractive)
+
   lazy var videoLayer: ViewLayer = {
     let layer = ViewLayer(self)
     return layer
@@ -106,10 +110,13 @@ class VideoView: NSView {
     return handle
   }
 
-  /// Stops the display link, then frees mpv's renderer and destroys `handle`. The display link is stopped before `isUninited` is
-  /// locked for writing, since stopping it waits for a callback in progress and the callback waits to read `isUninited`.
+  /// Stops the display link, then frees mpv's renderer and destroys `handle`. The display link is stopped on `displayLinkQueue`,
+  /// after the starts and stops asked for before, and before `isUninited` is locked for writing, since stopping it waits for a
+  /// callback in progress and the callback waits to read `isUninited`.
   private func uninit(destroying handle: OpaquePointer?) {
-    stopDisplayLink()
+    if let link {
+      displayLinkQueue.sync { stop(link) }
+    }
     player.mpv.lockAndSetOpenGLContext()
     defer { player.mpv.unlockOpenGLContext() }
     $isUninited.withWriteLock() { isUninited in
@@ -238,18 +245,28 @@ class VideoView: NSView {
     return link
   }
 
+  /// Start the display link on `displayLinkQueue`, unless it is running there by then.
   func startDisplayLink() {
     let link = obtainDisplayLink()
-    guard !CVDisplayLinkIsRunning(link) else { return }
     updateDisplayLink()
-    checkResult(CVDisplayLinkSetOutputCallback(link, displayLinkCallback, mutableRawPointerOf(obj: self)),
-                "CVDisplayLinkSetOutputCallback")
-    checkResult(CVDisplayLinkStart(link), "CVDisplayLinkStart")
-    log("Display link started", level: .verbose)
+    displayLinkQueue.async { [self] in
+      guard !CVDisplayLinkIsRunning(link) else { return }
+      checkResult(CVDisplayLinkSetOutputCallback(link, displayLinkCallback, mutableRawPointerOf(obj: self)),
+                  "CVDisplayLinkSetOutputCallback")
+      checkResult(CVDisplayLinkStart(link), "CVDisplayLinkStart")
+      log("Display link started", level: .verbose)
+    }
   }
 
+  /// Stop the display link on `displayLinkQueue`, without the calling thread waiting for a callback in progress.
   @objc func stopDisplayLink() {
-    guard let link, CVDisplayLinkIsRunning(link) else { return }
+    guard let link else { return }
+    displayLinkQueue.async { [self] in stop(link) }
+  }
+
+  /// Stop `link`, on `displayLinkQueue`, waiting for a callback in progress to return.
+  private func stop(_ link: CVDisplayLink) {
+    guard CVDisplayLinkIsRunning(link) else { return }
     checkResult(CVDisplayLinkStop(link), "CVDisplayLinkStop")
     log("Display link stopped", level: .verbose)
   }
@@ -524,7 +541,8 @@ extension VideoView {
     guard !isUninited, currentDisplay == displayId, player.info.state.loaded else { return }
     let edrEnabled: Bool?
     if let primaries, isHDRVideo(primaries: primaries, gamma: gamma, peak: peak) {
-      edrEnabled = requestEdrMode(primaries: primaries)
+      edrEnabled = requestEdrMode(primaries: primaries,
+                                  edrPotential: window?.screen?.maximumPotentialExtendedDynamicRangeColorComponentValue ?? 1.0)
       setToneMappingForHDR(on: displayId)
     } else {
       edrEnabled = false
@@ -564,10 +582,13 @@ extension VideoView {
     }
   }
 
-  private func requestEdrMode(primaries: String) -> Bool? {
+  /// Enable EDR mode for an HDR video whose primaries `mpv` answered, on a screen whose maximum potential EDR color component value
+  /// is `edrPotential`, setting the layer's color space and `mpv`'s options without waiting for `mpv`.
+  /// - Returns: `true` if EDR mode is enabled, `false` if it is not available, or `nil` if HDR is disabled for the player.
+  func requestEdrMode(primaries: String, edrPotential: CGFloat) -> Bool? {
     guard let mpv = player.mpv else { return false }
 
-    guard (window?.screen?.maximumPotentialExtendedDynamicRangeColorComponentValue ?? 1.0) > 1.0 else {
+    guard edrPotential > 1.0 else {
       logHDR("HDR video was found but the display does not support EDR mode")
       return false
     }

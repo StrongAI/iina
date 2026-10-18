@@ -94,7 +94,9 @@ class MPVController: NSObject {
   var mpv: OpaquePointer!
   var mpvRenderContext: OpaquePointer?
 
-  private var openGLContext: CGLContextObj! = nil
+  /// The OpenGL context of the video layer, which the renderer is created with, set once the layer has made it in request order,
+  /// see `mpvInitRendering()`.
+  @Atomic private var openGLContext: CGLContextObj? = nil
 
   /// [DispatchQueue](https://developer.apple.com/documentation/dispatch/dispatchqueue) for reading `mpv`
   /// events.
@@ -767,9 +769,10 @@ class MPVController: NSObject {
   ///
   /// This method creates and initializes the `mpv` renderer and sets the callback that `mpv` calls when a new video frame is available.
   /// The renderer is created in request order, see `inRequestOrder`, with the OpenGL context of the video view's layer locked and
-  /// current, so that `mpv` handles the requests made after this, such as loading a file, once the renderer exists. Then
-  /// `force-window` is set to `immediate`, which makes audio-only subtitle rendering work with `vo=libmpv`, but set before the renderer
-  /// exists can race the video output thread against its creation.
+  /// current, so that `mpv` handles the requests made after this, such as loading a file, once the renderer exists. The layer makes
+  /// its OpenGL context there first, choosing its pixel format by the options `mpv` started with, see `ViewLayer.makeOpenGL(then:)`.
+  /// Then `force-window` is set to `immediate`, which makes audio-only subtitle rendering work with `vo=libmpv`, but set before the
+  /// renderer exists can race the video output thread against its creation.
   ///
   /// - Note: Advanced control must be enabled for the screenshot command to work when the window flag is used. See issue
   ///         [#4822](https://github.com/iina/iina/issues/4822) for details.
@@ -779,8 +782,8 @@ class MPVController: NSObject {
     }
     let videoView: VideoView = player.mainWindow.videoView
     let layer = videoView.videoLayer
-    openGLContext = layer.cglContext
     inRequestOrder { [self] in
+      layer.makeOpenGL { openGLContext = $0 }
       // No frame is drawn with the OpenGL context while the renderer is created with it.
       layer.displayLock.lock()
       defer { layer.displayLock.unlock() }
@@ -831,13 +834,17 @@ class MPVController: NSObject {
   /// - Reference: [Concurrency and OpenGL](https://developer.apple.com/library/archive/documentation/GraphicsImaging/Conceptual/OpenGL-MacProgGuide/opengl_threading/opengl_threading.html)
   /// - Reference: [OpenGL Context](https://www.khronos.org/opengl/wiki/OpenGL_Context)
   /// - Attention: Do not forget to unlock the OpenGL context by calling `unlockOpenGLContext`
+  /// - Note: Before the video layer has made its OpenGL context, see `mpvInitRendering()`, there is no context to lock, nothing
+  ///     having been rendered with it.
   func lockAndSetOpenGLContext() {
+    guard let openGLContext else { return }
     CGLLockContext(openGLContext)
     CGLSetCurrentContext(openGLContext)
   }
 
   /// Unlock the OpenGL context associated with the mpv renderer.
   func unlockOpenGLContext() {
+    guard let openGLContext else { return }
     CGLUnlockContext(openGLContext)
   }
 

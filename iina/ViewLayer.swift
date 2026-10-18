@@ -73,9 +73,19 @@ class ViewLayer: CAOpenGLLayer {
 
   private var bufferDepth: GLint = 8
 
-  /// The OpenGL context the layer draws with, which `mpv`'s renderer is created with.
-  let cglContext: CGLContextObj
-  private let cglPixelFormat: CGLPixelFormatObj
+  /// The pixel format and OpenGL context the layer draws with.
+  private struct OpenGL {
+    let pixelFormat: CGLPixelFormatObj
+    let context: CGLContextObj
+  }
+
+  /// The layer's pixel format and OpenGL context, which `mpv`'s renderer is created with, made in request order once `mpv` has
+  /// started, see `makeOpenGL(then:)`, and shared with the layer's shadow copies; `nil` until they are made, the layer drawing
+  /// nothing meanwhile.
+  @Atomic private var openGL: OpenGL? = nil
+
+  /// The OpenGL context the layer draws with, which `mpv`'s renderer is created with, or `nil` until it is made.
+  var cglContext: CGLContextObj? { openGL?.context }
 
   /// Lock to single thread calls to `display`, held for the whole of a frame. Internal so that tests can hold it.
   let displayLock: NSLocking
@@ -114,15 +124,10 @@ class ViewLayer: CAOpenGLLayer {
   /// - Parameter videoView: The view this layer will be associated with.
   init(_ videoView: VideoView) {
     self.videoView = videoView
-    (cglPixelFormat, bufferDepth) = ViewLayer.createPixelFormat(videoView.player)
-    cglContext = ViewLayer.createContext(cglPixelFormat)
     displayLock = NSRecursiveLock()
     super.init()
     autoresizingMask = [.layerWidthSizable, .layerHeightSizable]
     backgroundColor = NSColor.black.cgColor
-    if bufferDepth > 8 {
-      contentsFormat = .RGBA16Float
-    }
     isAsynchronous = false
     // when resized but mpv hasn't rendered a new frame,
     // the old content's aspect ratio should be preserved.
@@ -139,8 +144,7 @@ class ViewLayer: CAOpenGLLayer {
   override init(layer: Any) {
     let previousLayer = layer as! ViewLayer
     videoView = previousLayer.videoView
-    cglPixelFormat = previousLayer.cglPixelFormat
-    cglContext = previousLayer.cglContext
+    _openGL = previousLayer._openGL
     displayLock = previousLayer.displayLock
     super.init(layer: layer)
     autoresizingMask = previousLayer.autoresizingMask
@@ -251,9 +255,39 @@ class ViewLayer: CAOpenGLLayer {
     }
   }
 
-  override func copyCGLPixelFormat(forDisplayMask mask: UInt32) -> CGLPixelFormatObj { cglPixelFormat }
+  override func copyCGLPixelFormat(forDisplayMask mask: UInt32) -> CGLPixelFormatObj { madeOpenGL.pixelFormat }
 
-  override func copyCGLContext(forPixelFormat pf: CGLPixelFormatObj) -> CGLContextObj { cglContext }
+  override func copyCGLContext(forPixelFormat pf: CGLPixelFormatObj) -> CGLContextObj { madeOpenGL.context }
+
+  /// The layer's pixel format and OpenGL context. Core Animation asks for them only while the layer draws, which it does only once
+  /// they are made, see `display()`; should it ask before, they are made at once, reading `mpv`'s options on the calling thread.
+  private var madeOpenGL: OpenGL {
+    if let openGL { return openGL }
+    makeOpenGL { _ in }
+    return openGL!
+  }
+
+  /// Make the layer's pixel format and OpenGL context, unless they are made, calling `made` with the context before the layer draws
+  /// with it. The pixel format is chosen by `mpv`'s `cocoa-cb-sw-renderer` and `cocoa-cb-10bit-context` options, which are read from
+  /// `mpv` on the calling thread, so `MPVController.mpvInitRendering()` makes them in request order, where the options read are the
+  /// ones `mpv` started with and the main thread does not wait for `mpv` to answer them.
+  func makeOpenGL(then made: (CGLContextObj) -> Void) {
+    let isDeep = $openGL.withLock { openGL -> Bool in
+      if let openGL {
+        made(openGL.context)
+        return false
+      }
+      let (pixelFormat, depth) = ViewLayer.createPixelFormat(videoView.player)
+      bufferDepth = depth
+      let context = ViewLayer.createContext(pixelFormat)
+      made(context)
+      openGL = OpenGL(pixelFormat: pixelFormat, context: context)
+      return depth > 8
+    }
+    if isDeep {
+      DispatchQueue.main.async { [self] in contentsFormat = .RGBA16Float }
+    }
+  }
 
   /// Reload the content of this layer.
   ///
@@ -270,6 +304,9 @@ class ViewLayer: CAOpenGLLayer {
       mpvGLQueue.async { [self] in display() }
       return
     }
+
+    // Nothing is drawn until the pixel format and OpenGL context are made, see makeOpenGL(then:).
+    guard openGL != nil else { return }
 
     displayLock.lock()
     defer { displayLock.unlock() }
