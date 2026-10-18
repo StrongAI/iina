@@ -48,7 +48,9 @@ class AppDelegate: NSObject, NSApplicationDelegate, SPUUpdaterDelegate {
 
   private var commandLineStatus = CommandLineStatus()
 
-  private var isTerminating = false
+  /// Whether termination has started. A test that runs `applicationShouldTerminate` resets it, so that the app hosting the tests is
+  /// not left terminating.
+  var isTerminating = false
 
   /// Longest time to wait for asynchronous shutdown tasks to finish before giving up on waiting and proceeding with termination.
   ///
@@ -546,7 +548,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, SPUUpdaterDelegate {
     // Close all windows. When a player window is closed it will send a stop command to mpv to stop
     // playback and unload the file.
     Logger.log("Closing all windows")
-    for window in NSApp.windows {
+    for window in Self.terminatingWindows() {
       window.close()
     }
 
@@ -555,7 +557,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, SPUUpdaterDelegate {
     // player and shutdown was initiated by sending a quit command directly to mpv through it's IPC
     // interface causing mpv and the player to shutdown before application termination is initiated.
     allPlayersHaveShutdown = true
-    for player in PlayerCore.playerCores {
+    for player in Self.terminatingPlayers() {
       if player.info.state != .shutDown {
         allPlayersHaveShutdown = false
         break
@@ -564,9 +566,9 @@ class AppDelegate: NSObject, NSApplicationDelegate, SPUUpdaterDelegate {
     if allPlayersHaveShutdown {
       Logger.log("All players have shutdown")
     } else {
-      // Shutdown of player cores involves sending the stop and quit commands to mpv. Even though
-      // these commands are sent to mpv using the synchronous API mpv executes them asynchronously.
-      // This requires IINA to wait for mpv to finish executing these commands.
+      // Shutdown of player cores involves sending the stop and quit commands to mpv, which are sent
+      // without waiting and which mpv executes asynchronously. This requires IINA to wait for mpv to
+      // finish executing these commands.
       Logger.log("Waiting for players to stop and shutdown")
     }
 
@@ -601,7 +603,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, SPUUpdaterDelegate {
       if !allPlayersHaveShutdown {
         Logger.log("Timed out waiting for players to stop and shutdown", level: .warning)
         // For debugging list players that have not terminated.
-        for player in PlayerCore.playerCores {
+        for player in Self.terminatingPlayers() {
           let label = player.label ?? "unlabeled"
           if player.info.state == .stopping {
             Logger.log("Player \(label) failed to stop", level: .warning)
@@ -648,7 +650,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, SPUUpdaterDelegate {
         Logger.log("Player stopped after application termination timed out", level: .warning)
         return
       }
-      guard let player = note.object as? PlayerCore else { return }
+      guard let player = note.object as? PlayerCore, Self.terminatingPlayers().contains(where: { $0 === player }) else { return }
       // Now that the player has stopped it is safe to instruct the player to terminate. IINA MUST
       // wait for the player to stop before instructing it to terminate because sending the quit
       // command to mpv while it is still asynchronously executing the stop command can result in a
@@ -666,7 +668,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, SPUUpdaterDelegate {
     func proceedWithTermination() {
       if !allPlayersHaveShutdown {
         // If any player has not shutdown then continue waiting.
-        for player in PlayerCore.playerCores {
+        for player in Self.terminatingPlayers() {
           guard player.info.state == .shutDown else { return }
         }
         allPlayersHaveShutdown = true
@@ -748,7 +750,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, SPUUpdaterDelegate {
     observers.append(observer)
 
     // Instruct any players that are already stopped to start shutting down.
-    for player in PlayerCore.playerCores {
+    for player in Self.terminatingPlayers() {
       if player.info.state == .idle {
         player.shutdown()
       }
@@ -775,12 +777,23 @@ class AppDelegate: NSObject, NSApplicationDelegate, SPUUpdaterDelegate {
     Logger.closeLogFile()
   }
 
-  /// Log that the app will terminate and close the log file, then tell AppKit to proceed with termination once every line logged
-  /// before has been written and the file is closed, so that the last lines reach the file without the main thread waiting for it.
+  /// Log that the app will terminate, then close the log file and tell AppKit to proceed with termination through `replyToTerminate`.
   private func replyToTerminateOnceLogClosed() {
     Logger.log("App will terminate")
-    Logger.closeLogFile { NSApp.reply(toApplicationShouldTerminate: true) }
+    Self.replyToTerminate()
   }
+
+  /// Close the log file, then tell AppKit to proceed with termination once every line logged before has been written and the file
+  /// is closed, so that the last lines reach the file without the main thread waiting for it. A test replaces it, so that running
+  /// `applicationShouldTerminate` neither closes the log of the app hosting the tests nor terminates it.
+  static var replyToTerminate: () -> Void = { Logger.closeLogFile { NSApp.reply(toApplicationShouldTerminate: true) } }
+
+  /// The players termination shuts down and waits for, read on the main thread. A test replaces it, so that running
+  /// `applicationShouldTerminate` shuts down only the player the test made and not the players of the app hosting the tests.
+  static var terminatingPlayers: () -> [PlayerCore] = { PlayerCore.playerCores }
+
+  /// The windows termination closes, read on the main thread. A test replaces it, as it does `terminatingPlayers`.
+  static var terminatingWindows: () -> [NSWindow] = { NSApp.windows }
 
   /**
    When dragging multiple files to App icon, cocoa will simply call this method repeatedly.
@@ -1459,7 +1472,9 @@ class RemoteCommandController {
   /// Remote commands supported by IINA.
   private let commands: [MPRemoteCommand]
 
-  private var isEnabled = false
+  /// Whether the commands are enabled. A test that runs `AppDelegate.applicationShouldTerminate`, which disables them, reads it to
+  /// enable them again after.
+  private(set) var isEnabled = false
 
   /// Returns the value to use for the [preferredIntervals](https://developer.apple.com/documentation/mediaplayer/mpskipintervalcommand/preferredintervals) property.
   ///
