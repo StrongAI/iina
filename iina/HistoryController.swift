@@ -27,12 +27,20 @@ class HistoryController: NSObject {
   @Atomic var tasksOutstanding = 0
 
   private let plistURL: URL
-  private let queue = DispatchQueue(label: "IINAHistoryController", qos: .background)
+
+  /// The serial queue the history file is read, archived and written on, in the order the history is changed, so that the main
+  /// thread does not wait for the file system. A test holds it.
+  static let queue = DispatchQueue(label: "IINAHistoryController", qos: .background)
 
   init(plistFileURL: URL) {
     self.plistURL = plistFileURL
     super.init()
-    read()
+    // The history file is read on the queue, ahead of every change to the history, and a window showing the history reloads it
+    // once it is read.
+    Self.queue.async { [self] in
+      read()
+      NotificationCenter.default.post(Notification(name: .iinaHistoryUpdated))
+    }
   }
 
   private func read() {
@@ -71,14 +79,15 @@ class HistoryController: NSObject {
     }
   }
 
+  /// Archive the history and write it to the history file, on the queue. The history is copied under its lock and archived and
+  /// written after, so that a thread reading the history meanwhile does not wait for the file system.
   private func save() {
+    let history = self.history
     do {
-      try $history.withLock { history in
-        log("Saving \(history.count) playback history entries")
-        let data = try NSKeyedArchiver.archivedData(withRootObject: history, requiringSecureCoding: true)
-        try data.write(to: plistURL, options: [.atomic])
-        log("Saved \(history.count) playback history entries")
-      }
+      log("Saving \(history.count) playback history entries")
+      let data = try NSKeyedArchiver.archivedData(withRootObject: history, requiringSecureCoding: true)
+      try data.write(to: plistURL, options: [.atomic])
+      log("Saved \(history.count) playback history entries")
       NotificationCenter.default.post(Notification(name: .iinaHistoryUpdated))
     } catch {
       log("Failed to save playback history to file \(plistURL.path): \(error)", level: .error)
@@ -95,7 +104,7 @@ class HistoryController: NSObject {
   func add(_ url: URL, duration: Double, title: String?, _ ignorePath: Bool) {
     guard Preference.bool(for: .recordPlaybackHistory) else { return }
     $tasksOutstanding.withLock { $0 += 1 }
-    queue.async { [self] in
+    Self.queue.async { [self] in
       let mpvMd5 = Utility.mpvWatchLaterMd5(url, ignorePath)
       $history.withLock { history in
         if let existingItem = history.first(where: { $0.mpvMd5 == mpvMd5 }),
@@ -107,35 +116,50 @@ class HistoryController: NSObject {
         log("Adding to history: \(String(describing: entry))", level: .verbose)
       }
       save()
-      $tasksOutstanding.withLock { tasksOutstanding in
-        tasksOutstanding -= 1
-        if tasksOutstanding != 0 {
-          // The history controller must be able to finish saving playback history before IINA
-          // terminates or history will be lost. If termination times out before saving of playback
-          // history has finished then history will be lost. If that happens then the qos of the
-          // history batch queue will need to be raised to allow the history controller to keep up
-          // with requests to save history.
-          log("History tasks outstanding: \(tasksOutstanding)")
-        }
-      }
-      NotificationCenter.default.post(Notification(name: .iinaHistoryTaskFinished))
+      finishTask()
     }
   }
 
+  /// Remove `entries` from playback history and save it, on the queue.
   func remove(_ entries: [PlaybackHistory]) {
-    $history.withLock { history in
-      log("Removing \(entries.count) playback history entries")
-      history = history.filter { !entries.contains($0) }
+    $tasksOutstanding.withLock { $0 += 1 }
+    Self.queue.async { [self] in
+      $history.withLock { history in
+        log("Removing \(entries.count) playback history entries")
+        history = history.filter { !entries.contains($0) }
+      }
+      save()
+      finishTask()
     }
-    save()
   }
 
+  /// Remove every entry from playback history and save it, on the queue.
   func removeAll() {
-    $history.withLock { history in
-      log("Removing all playback history entries")
-      history = []
+    $tasksOutstanding.withLock { $0 += 1 }
+    Self.queue.async { [self] in
+      $history.withLock { history in
+        log("Removing all playback history entries")
+        history = []
+      }
+      save()
+      finishTask()
     }
-    save()
+  }
+
+  /// Count a task on the queue as finished and tell termination, which waits for every task to finish.
+  private func finishTask() {
+    $tasksOutstanding.withLock { tasksOutstanding in
+      tasksOutstanding -= 1
+      if tasksOutstanding != 0 {
+        // The history controller must be able to finish saving playback history before IINA
+        // terminates or history will be lost. If termination times out before saving of playback
+        // history has finished then history will be lost. If that happens then the qos of the
+        // history batch queue will need to be raised to allow the history controller to keep up
+        // with requests to save history.
+        log("History tasks outstanding: \(tasksOutstanding)")
+      }
+    }
+    NotificationCenter.default.post(Notification(name: .iinaHistoryTaskFinished))
   }
 
   private func log(_ message: @autoclosure () -> String, level: Logger.Level = .debug) {

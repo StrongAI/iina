@@ -274,7 +274,8 @@ class AppDelegate: NSObject, NSApplicationDelegate, SPUUpdaterDelegate {
     // guide window
     switch InfoDictionary.shared.buildType {
     case .release, .beta:
-      if FirstRunManager.isFirstRun(for: .init("firstLaunchAfter\(version)")) {
+      FirstRunManager.isFirstRun(for: .init("firstLaunchAfter\(version)")) { [self] isFirstRun in
+        guard isFirstRun else { return }
         guideWindow.show(pages: [.highlights])
       }
     default:
@@ -292,7 +293,8 @@ class AppDelegate: NSObject, NSApplicationDelegate, SPUUpdaterDelegate {
     }
 
     // Install plugins
-    if FirstRunManager.isFirstRun(for: .init("installedDefaultPlugins")) {
+    FirstRunManager.isFirstRun(for: .init("installedDefaultPlugins")) { isFirstRun in
+      guard isFirstRun else { return }
       Logger.log("Installing default plugins")
       JavascriptPlugin.installPackages(in: Bundle.main.resourcePath?.appending("/plugins")) { installedAll in
         if !installedAll {

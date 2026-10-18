@@ -22,19 +22,18 @@ class FirstRunManager {
     }
   }
 
-  /// Whether the flag file of `key` is not in the Application Support folder. When it is not, it is written on
-  /// `Utility.folderQueue`, after the app's folders are made.
-  static func isFirstRun(for key: Key) -> Bool {
+  /// Find whether the flag file of `key` is not in the Application Support folder, writing it when it is not, on
+  /// `Utility.folderQueue` after the app's folders are made, so that the main thread does not wait for the file system; then give
+  /// the answer to `then` on the main thread.
+  static func isFirstRun(for key: Key, then: @escaping (Bool) -> Void) {
     let filename = ".\(key.rawValue)"
     let fileURL = Utility.appSupportDirUrl.appendingPathComponent(filename, isDirectory: false)
-    let exists = FileManager.default.fileExists(atPath: fileURL.path)
-    if exists {
-      return false
-    } else {
-      Utility.folderQueue.async {
+    Utility.folderQueue.async {
+      let isFirstRun = !FileManager.default.fileExists(atPath: fileURL.path)
+      if isFirstRun {
         FileManager.default.createFile(atPath: fileURL.path, contents: nil, attributes: nil)
       }
-      return true
+      DispatchQueue.main.async { then(isFirstRun) }
     }
   }
 
