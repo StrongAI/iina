@@ -1214,6 +1214,17 @@ class AppDelegate: NSObject, NSApplicationDelegate, SPUUpdaterDelegate {
 
   // MARK: - Recent Documents
 
+  /// The serial queue the bookmarks of the recent documents are made and resolved on, so that the main thread does not wait for the
+  /// file system.
+  static let recentDocumentsQueue = DispatchQueue(label: "IINARecentDocuments", qos: .utility)
+
+  /// The recent documents, read on the main thread. A test replaces it, so that it saves and restores documents without the
+  /// recent-documents list it shares with the installed app.
+  static var recentDocumentURLs: () -> [URL] = { NSDocumentController.shared.recentDocumentURLs }
+
+  /// Lists a document among the recent documents, on the main thread. A test replaces it, as it does `recentDocumentURLs`.
+  static var noteRecentDocumentURL: (URL) -> Void = { NSDocumentController.shared.noteNewRecentDocumentURL($0) }
+
   /// Empties the recent documents list for the application.
   ///
   /// This is part of a workaround for macOS Sonoma clearing the list of recent documents. See the method
@@ -1262,51 +1273,65 @@ class AppDelegate: NSObject, NSApplicationDelegate, SPUUpdaterDelegate {
   ///         volume that is unreachable. For this reason the workaround is disabled by default and must be enabled by running the
   ///         following command in [Terminal](https://support.apple.com/guide/terminal/welcome/mac):
   ///         `defaults write com.colliderli.iina enableRecentDocumentsWorkaround true`
-  private func restoreRecentDocuments() {
+  func restoreRecentDocuments() {
     guard Preference.bool(for: .enableRecentDocumentsWorkaround),
           #available(macOS 13, *), Preference.bool(for: .recordRecentFiles),
-          NSDocumentController.shared.recentDocumentURLs.isEmpty,
+          AppDelegate.recentDocumentURLs().isEmpty,
           let recentDocuments = Preference.array(for: .recentDocuments),
           !recentDocuments.isEmpty else { return }
-    var foundStale = false
-    for document in recentDocuments {
-      var isStale = false
-      // Recent documents are normally stored as bookmark data.
-      guard let asData = document as? Data else {
-        guard let asString = document as? String, let url = URL(string: asString) else {
-          // Should never occur. This is an internal error.
-          Logger.log("Saved recent document is of unrecognized type: \(type(of: document))",
-                     level: .error)
+    // The saved bookmarks are resolved on the recent documents queue, so that the main thread does not wait for the file system,
+    // and the documents they resolve to are then listed on the main thread.
+    AppDelegate.recentDocumentsQueue.async { [self] in
+      var urls: [URL] = []
+      var foundStale = false
+      for document in recentDocuments {
+        var isStale = false
+        // Recent documents are normally stored as bookmark data.
+        guard let asData = document as? Data else {
+          guard let asString = document as? String, let url = URL(string: asString) else {
+            // Should never occur. This is an internal error.
+            Logger.log("Saved recent document is of unrecognized type: \(type(of: document))",
+                       level: .error)
+            continue
+          }
+          // Saving as a bookmark must have failed and instead the URL was saved as a string.
+          urls.append(url)
           continue
         }
-        // Saving as a bookmark must have failed and instead the URL was saved as a string.
-        NSDocumentController.shared.noteNewRecentDocumentURL(url)
-        continue
-      }
-      // Must not cause macOS to prompt the user to mount a volume when the list contains files that
-      // are on volumes that are not currently mounted.
-      guard let bookmark = try? URL(resolvingBookmarkData: asData,
-                                    options: [.withoutMounting, .withoutUI],
-                                    bookmarkDataIsStale: &isStale) else {
-        // Creating a URL from a bookmark fails if the original file can not be located or is on a
-        // volume that is not mounted. Form a URL from the path contained in the bookmark.
-        guard let resource = URL.resourceValues(forKeys: [.pathKey], fromBookmarkData: asData),
-              let path = resource.path, let url = URL(string: path) else {
-          Logger.log("Unable to obtain obtain the path from a bookmark", level: .error)
+        // Must not cause macOS to prompt the user to mount a volume when the list contains files that
+        // are on volumes that are not currently mounted.
+        guard let bookmark = try? URL(resolvingBookmarkData: asData,
+                                      options: [.withoutMounting, .withoutUI],
+                                      bookmarkDataIsStale: &isStale) else {
+          // Creating a URL from a bookmark fails if the original file can not be located or is on a
+          // volume that is not mounted. Form a URL from the path contained in the bookmark.
+          guard let resource = URL.resourceValues(forKeys: [.pathKey], fromBookmarkData: asData),
+                let path = resource.path, let url = URL(string: path) else {
+            Logger.log("Unable to obtain obtain the path from a bookmark", level: .error)
+            continue
+          }
+          Logger.log("Unable to create a bookmark, creating URL from path for: \(path)", level: .verbose)
+          urls.append(url)
           continue
         }
-        Logger.log("Unable to create a bookmark, creating URL from path for: \(path)", level: .verbose)
-        NSDocumentController.shared.noteNewRecentDocumentURL(url)
-        continue
+        foundStale = foundStale || isStale
+        urls.append(bookmark)
       }
-      foundStale = foundStale || isStale
-      NSDocumentController.shared.noteNewRecentDocumentURL(bookmark)
+      DispatchQueue.main.async { [self, urls, foundStale] in
+        // A document listed while the bookmarks were resolved is listed again after the restored ones, so that it stays the most
+        // recent, and the list is saved, since the save made when it was listed left the restored documents out.
+        let listedMeanwhile = AppDelegate.recentDocumentURLs()
+        urls.forEach(AppDelegate.noteRecentDocumentURL)
+        listedMeanwhile.reversed().forEach(AppDelegate.noteRecentDocumentURL)
+        Logger.log("Restored list of recent documents")
+        guard foundStale || !listedMeanwhile.isEmpty else { return }
+        if foundStale {
+          Logger.log("Found stale bookmarks in saved recent documents")
+        }
+        // Save the recent documents in order to refresh stale bookmarks.
+        saveRecentDocuments()
+      }
     }
-    Logger.log("Restored list of recent documents")
-    guard foundStale else { return }
-    Logger.log("Found stale bookmarks in saved recent documents")
-    // Save the recent documents in order to refresh stale bookmarks.
-    saveRecentDocuments()
   }
 
   /// Save the list of recently opened files.
@@ -1319,22 +1344,29 @@ class AppDelegate: NSObject, NSApplicationDelegate, SPUUpdaterDelegate {
   /// information..
   func saveRecentDocuments() {
     guard Preference.bool(for: .enableRecentDocumentsWorkaround), #available(macOS 13, *) else { return }
-    var recentDocuments: [Any] = []
-    for document in NSDocumentController.shared.recentDocumentURLs {
-      guard let bookmark = try? document.bookmarkData() else {
-        // Fall back to storing a string when unable to create a bookmark.
-        let path = document.absoluteString
-        Logger.log("Unable to create a bookmark, saving recent document as a string: \(path)")
-        recentDocuments.append(path)
-        continue
+    // The recent documents are read on the main thread and their bookmarks made on the recent documents queue, so that the main
+    // thread does not wait for the file system. The list is then saved on the main thread, in the order the saves were asked for.
+    let documents = AppDelegate.recentDocumentURLs()
+    AppDelegate.recentDocumentsQueue.async {
+      var recentDocuments: [Any] = []
+      for document in documents {
+        guard let bookmark = try? document.bookmarkData() else {
+          // Fall back to storing a string when unable to create a bookmark.
+          let path = document.absoluteString
+          Logger.log("Unable to create a bookmark, saving recent document as a string: \(path)")
+          recentDocuments.append(path)
+          continue
+        }
+        recentDocuments.append(bookmark)
       }
-      recentDocuments.append(bookmark)
-    }
-    Preference.set(recentDocuments, for: .recentDocuments)
-    if recentDocuments.isEmpty {
-      Logger.log("Cleared list of recent documents")
-    } else {
-      Logger.log("Saved list of recent documents")
+      DispatchQueue.main.async { [recentDocuments] in
+        Preference.set(recentDocuments, for: .recentDocuments)
+        if recentDocuments.isEmpty {
+          Logger.log("Cleared list of recent documents")
+        } else {
+          Logger.log("Saved list of recent documents")
+        }
+      }
     }
   }
 }

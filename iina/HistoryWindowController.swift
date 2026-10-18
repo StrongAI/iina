@@ -66,6 +66,15 @@ class HistoryWindowController: NSWindowController, NSOutlineViewDelegate, NSOutl
 
   private var historyData: [String: [PlaybackHistory]] = [:]
   private var historyDataKeys: [String] = []
+  /// The files of the entries shown that exist, found when the entries were.
+  private var existingFiles: Set<URL> = []
+
+  /// The serial queue the window reads, searches and groups the history on and finds which of its files exist on, so that the main
+  /// thread does not wait for the history's lock, its first read or the file system.
+  static let dataQueue = DispatchQueue(label: "IINAHistoryWindowData", qos: .userInitiated)
+
+  /// Whether the file at a URL exists, found on `dataQueue`. A test replaces it, to record the thread each file is looked at on.
+  static var fileExists: (URL) -> Bool = { FileManager.default.fileExists(atPath: $0.path) }
 
   init() {
     let window = CommonWindow(
@@ -124,14 +133,16 @@ class HistoryWindowController: NSWindowController, NSOutlineViewDelegate, NSOutl
       return column
     }.forEach { outlineView.addTableColumn($0) }
 
-    prepareData()
     outlineView.delegate = self
     outlineView.dataSource = self
     outlineView.menu = NSMenu()
     outlineView.menu?.delegate = self
     outlineView.target = self
     outlineView.doubleAction = #selector(doubleAction)
-    outlineView.expandItem(nil, expandChildren: true)
+    prepareData { [self] in
+      outlineView.reloadData()
+      outlineView.expandItem(nil, expandChildren: true)
+    }
   }
 
   required init?(coder: NSCoder) {
@@ -139,11 +150,12 @@ class HistoryWindowController: NSWindowController, NSOutlineViewDelegate, NSOutl
   }
 
   func reloadData() {
-    prepareData()
-    adjustTimeColumnMinWidth()
-    outlineView.reloadData()
-    outlineView.expandItem(nil, expandChildren: true)
-    updateExpandCollapseSegmentState()
+    prepareData { [self] in
+      adjustTimeColumnMinWidth()
+      outlineView.reloadData()
+      outlineView.expandItem(nil, expandChildren: true)
+      updateExpandCollapseSegmentState()
+    }
   }
 
   private func updateExpandCollapseSegmentState() {
@@ -186,36 +198,50 @@ class HistoryWindowController: NSWindowController, NSOutlineViewDelegate, NSOutl
     }
   }
 
-  private func prepareData(fromHistory historyList: [PlaybackHistory]? = nil) {
-    // reconstruct data
-    historyData.removeAll()
-    historyDataKeys.removeAll()
-
-    let historyList = historyList ?? HistoryController.shared.history
-
-    for entry in historyList {
-      addToData(entry, forKey: getKey[groupBy]!(entry))
-    }
-
-    switch groupBy {
-    case .lastPlayed:
-      historyDataKeys.sort { lhs, rhs in
-        let lDate = historyData[lhs]?.map(\.addedDate).max() ?? .distantPast
-        let rDate = historyData[rhs]?.map(\.addedDate).max() ?? .distantPast
-        return lDate > rDate
+  /// Read the history, keep the entries `isIncluded` accepts, group and sort them and find which of their files exist on `dataQueue`,
+  /// so that the main thread does not wait for the history's lock, its first read or the file system, then show them by calling
+  /// `completion` on the main thread.
+  private func prepareData(including isIncluded: ((PlaybackHistory) -> Bool)? = nil, then completion: @escaping () -> Void) {
+    let groupBy = groupBy
+    let getKey = getKey[groupBy]!
+    HistoryWindowController.dataQueue.async { [weak self] in
+      var historyList = HistoryController.shared.history
+      if let isIncluded {
+        historyList = historyList.filter(isIncluded)
       }
-    case .fileLocation:
-      historyDataKeys.sort { $0.localizedStandardCompare($1) == .orderedAscending }
-    }
 
-  }
+      // reconstruct data
+      var historyData: [String: [PlaybackHistory]] = [:]
+      var historyDataKeys: [String] = []
+      for entry in historyList {
+        let key = getKey(entry)
+        if historyData[key] == nil {
+          historyData[key] = []
+          historyDataKeys.append(key)
+        }
+        historyData[key]!.append(entry)
+      }
 
-  private func addToData(_ entry: PlaybackHistory, forKey key: String) {
-    if historyData[key] == nil {
-      historyData[key] = []
-      historyDataKeys.append(key)
+      switch groupBy {
+      case .lastPlayed:
+        historyDataKeys.sort { lhs, rhs in
+          let lDate = historyData[lhs]?.map(\.addedDate).max() ?? .distantPast
+          let rDate = historyData[rhs]?.map(\.addedDate).max() ?? .distantPast
+          return lDate > rDate
+        }
+      case .fileLocation:
+        historyDataKeys.sort { $0.localizedStandardCompare($1) == .orderedAscending }
+      }
+
+      let existingFiles = Set(historyList.map(\.url).filter { $0.isFileURL && HistoryWindowController.fileExists($0) })
+      DispatchQueue.main.async { [historyData, historyDataKeys] in
+        guard let self else { return }
+        self.historyData = historyData
+        self.historyDataKeys = historyDataKeys
+        self.existingFiles = existingFiles
+        completion()
+      }
     }
-    historyData[key]!.append(entry)
   }
 
   private func removeAfterConfirmation(_ entries: [PlaybackHistory]) {
@@ -308,7 +334,8 @@ class HistoryWindowController: NSWindowController, NSOutlineViewDelegate, NSOutl
     if let identifier = tableColumn?.identifier {
       guard let entry = item as? PlaybackHistory else { return nil }
       let isFile = entry.url.isFileURL
-      let fileExists = !isFile || FileManager.default.fileExists(atPath: entry.url.path)
+      // Whether the file exists was found when the entries were, so that the main thread does not wait for the file system.
+      let fileExists = !isFile || existingFiles.contains(entry.url)
       switch identifier {
       case .filename:
         let cell = (outlineView.makeView(withIdentifier: .filename, owner: nil) as? HistoryFilenameCellView) ?? HistoryFilenameCellView()
@@ -417,16 +444,15 @@ class HistoryWindowController: NSWindowController, NSOutlineViewDelegate, NSOutl
       reloadData()
       return
     }
-    let newObjects = HistoryController.shared.$history.withLock {
-      $0.filter { entry in
-        let string = searchOption == .filename ? entry.name : entry.url.path
-        // Do a locale-aware, case and diacritic insensitive search:
-        return string.localizedStandardContains(searchString)
-      }
+    let searchOption = searchOption
+    prepareData(including: { entry in
+      let string = searchOption == .filename ? entry.name : entry.url.path
+      // Do a locale-aware, case and diacritic insensitive search:
+      return string.localizedStandardContains(searchString)
+    }) { [self] in
+      outlineView.reloadData()
+      outlineView.expandItem(nil, expandChildren: true)
     }
-    prepareData(fromHistory: newObjects)
-    outlineView.reloadData()
-    outlineView.expandItem(nil, expandChildren: true)
   }
 
   // MARK: - Menu
@@ -460,14 +486,16 @@ class HistoryWindowController: NSWindowController, NSOutlineViewDelegate, NSOutl
     return indexSet.compactMap { outlineView.item(atRow: $0) as? PlaybackHistory }
   }
 
+  /// The files of the selected entries that exist, which were found when the entries were.
   private var selectedFiles: [URL] {
     if selectedEntries.isEmpty { return [] }
-    return selectedEntries.map { $0.url }.filter { FileManager.default.fileExists(atPath: $0.path) }
+    return selectedEntries.map { $0.url }.filter { existingFiles.contains($0) }
   }
 
+  /// The selected entries that are not files or whose files exist, which were found when the entries were.
   private var selectedPlayableEntries: [URL] {
     if selectedEntries.isEmpty { return [] }
-    return selectedEntries.map { $0.url }.filter { !$0.isFileURL || FileManager.default.fileExists(atPath: $0.path) }
+    return selectedEntries.map { $0.url }.filter { !$0.isFileURL || existingFiles.contains($0) }
   }
 
   func validateMenuItem(_ menuItem: NSMenuItem) -> Bool {
