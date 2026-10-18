@@ -261,10 +261,16 @@ class HistoryWindowController: NSWindowController, NSOutlineViewDelegate, NSOutl
   private func removeFileAfterConfirmation(_ entries: [PlaybackHistory]) {
     Utility.quickAskPanel("delete_file", sheetWindow: window) { respond in
       guard respond == .alertFirstButtonReturn else { return }
-      entries.forEach {
-        try? FileManager.default.trashItem(at: $0.url, resultingItemURL: nil)
-      }
-      self.reloadData()
+      HistoryWindowController.trash(entries.map(\.url)) { self.reloadData() }
+    }
+  }
+
+  /// Move the files at `urls` to the Trash on `dataQueue`, so that the main thread does not wait for the file system, then call
+  /// `completion` on the main thread.
+  static func trash(_ urls: [URL], then completion: @escaping () -> Void) {
+    dataQueue.async {
+      urls.forEach { try? FileManager.default.trashItem(at: $0, resultingItemURL: nil) }
+      DispatchQueue.main.async(execute: completion)
     }
   }
 
