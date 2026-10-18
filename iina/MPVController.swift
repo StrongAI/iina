@@ -1382,11 +1382,13 @@ class MPVController: NSObject {
     let cmd = name == MPVProperty.vf ? MPVCommand.vf : MPVCommand.af
 
     let str = filters.map { $0.stringFormat }.joined(separator: ",")
-    command(cmd, args: ["set", str], checkError: false) { returnValue in
-      if returnValue < 0 {
+    // The filters are set without waiting for mpv; a failure is shown, and the filter window reloaded, on the main thread.
+    asyncCommand(cmd, args: ["set", str]) { [self] returnValue in
+      guard returnValue < 0 else { return }
+      DispatchQueue.main.async { [self] in
         Utility.showAlert("filter.incorrect")
         // reload data in filter setting window
-        self.player.postNotification(.iinaVFChanged)
+        player.postNotification(.iinaVFChanged)
       }
     }
   }

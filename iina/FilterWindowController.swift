@@ -230,17 +230,20 @@ class FilterWindowController: NSWindowController, NSWindowDelegate {
       removeFilterFunction = pc.removeAudioFilter
       removeFilterUsingStringFunction = pc.removeAudioFilter
     }
-    let sendRemovedOSD: (Bool) -> Void = { removed in
+    // The table is reloaded once mpv has added or removed the filter, rather than at once, which would wait for mpv.
+    let sendRemovedOSD: (Bool) -> Void = { [self] removed in
       if removed {
         pc.sendOSD(.removeFilter)
       }
+      reloadTable()
     }
 
     if sender.state == .on {  // user activated filter
-      addFilterFunction(savedFilter.filterString) { added in
+      addFilterFunction(savedFilter.filterString) { [self] added in
         if added {
           pc.sendOSD(.addFilter(savedFilter.name))
         }
+        reloadTable()
       }
     } else {  // user deactivated filter
       if let asObject = MPVFilter(rawString: savedFilter.filterString),
@@ -261,8 +264,6 @@ class FilterWindowController: NSWindowController, NSWindowDelegate {
         removeFilterUsingStringFunction(savedFilter.filterString, sendRemovedOSD)
       }
     }
-
-    reloadTable()
   }
 
   @IBAction func deleteSavedFilterAction(_ sender: NSButton) {
