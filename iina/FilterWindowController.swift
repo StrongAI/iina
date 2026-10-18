@@ -71,9 +71,7 @@ class FilterWindowController: NSWindowController, NSWindowDelegate {
     splitView.setPosition(splitView.frame.height - 140, ofDividerAt: 0)
 
     savedFilters = (Preference.array(for: filterType == MPVProperty.af ? .savedAudioFilters : .savedVideoFilters) ?? []).compactMap(SavedFilter.init(dict:))
-    filters = PlayerCore.lastActive.mpv.getFilters(filterType)
-    currentFiltersTableView.reloadData()
-    savedFiltersTableView.reloadData()
+    loadFilters(of: PlayerCore.lastActive)
 
     keyRecordView.delegate = self
     editFilterKeyRecordView.delegate = self
@@ -104,19 +102,28 @@ class FilterWindowController: NSWindowController, NSWindowDelegate {
     // method. Thus this method may be called after IINA has commanded mpv to shutdown. Once mpv has
     // been told to shutdown mpv APIs must not be called as it can trigger a crash in mpv.
     guard pc.info.state.active else { return }
-    filters = pc.mpv.getFilters(filterType)
-    filterIsSaved = [Bool](repeatElement(false, count: filters.count))
-    savedFilters.forEach { savedFilter in
-      if let asObject = MPVFilter(rawString: savedFilter.filterString),
-         let index = filters.firstIndex(of: asObject) {
-        savedFilter.isEnabled = true
-        filterIsSaved[index] = true
-      } else {
-        savedFilter.isEnabled = false
+    loadFilters(of: pc)
+  }
+
+  /// Read `pc`'s filters without waiting for mpv, then list them, and which saved filters they hold, on the main thread.
+  private func loadFilters(of pc: PlayerCore) {
+    pc.mpv.getFiltersAsync(filterType) { filters in
+      DispatchQueue.main.async { [self] in
+        self.filters = filters
+        filterIsSaved = [Bool](repeatElement(false, count: filters.count))
+        savedFilters.forEach { savedFilter in
+          if let asObject = MPVFilter(rawString: savedFilter.filterString),
+             let index = filters.firstIndex(of: asObject) {
+            savedFilter.isEnabled = true
+            filterIsSaved[index] = true
+          } else {
+            savedFilter.isEnabled = false
+          }
+        }
+        currentFiltersTableView.reloadData()
+        savedFiltersTableView.reloadData()
       }
     }
-    currentFiltersTableView.reloadData()
-    savedFiltersTableView.reloadData()
   }
 
   func setFilters() {
