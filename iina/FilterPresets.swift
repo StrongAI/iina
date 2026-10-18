@@ -156,14 +156,42 @@ struct FilterParameterValue {
 /** Related data. */
 
 extension FilterPreset {
-  /** Preloaded localization. */
-  static let l10nDic: [String: String] = {
-    guard let filePath = Bundle.main.path(forResource: "FilterPresets", ofType: "strings"),
-      let dic = NSDictionary(contentsOfFile: filePath) as? [String : String] else {
-        return [:]
+  /// The queue the localized names are read on, so that the main thread does not wait for the file system.
+  static let queue = DispatchQueue(label: "IINAFilterPreset", qos: .userInitiated)
+
+  /// The strings of FilterPresets.strings, once `load(then:)` has read them on `queue`, and empty until then. Read and set on the
+  /// main thread; a test empties it to have the strings read again.
+  static var l10nDic: [String: String] = [:]
+
+  /// The callers to tell on the main thread once the strings being read have been read, `nil` while they are not being read.
+  private static var whenLoaded: [() -> Void]?
+
+  /// Read the strings on `queue` unless they have been read, then call `completion` on the main thread once they have been, after
+  /// the completions asked for before it.
+  static func load(then completion: @escaping () -> Void) {
+    guard l10nDic.isEmpty else {
+      DispatchQueue.main.async(execute: completion)
+      return
     }
-    return dic
-  }()
+    guard whenLoaded == nil else {
+      whenLoaded?.append(completion)
+      return
+    }
+    whenLoaded = [completion]
+    queue.async {
+      var strings: [String: String] = [:]
+      if let filePath = Bundle.main.path(forResource: "FilterPresets", ofType: "strings"),
+         let dic = NSDictionary(contentsOfFile: filePath) as? [String : String] {
+        strings = dic
+      }
+      DispatchQueue.main.async {
+        l10nDic = strings
+        let completions = whenLoaded ?? []
+        whenLoaded = nil
+        completions.forEach { $0() }
+      }
+    }
+  }
 
   static private let customMPVFilterPreset = FilterPreset("custom_mpv", params: ["name": PM.text(defaultValue: ""), "string": PM.text(defaultValue: "")], paramOrder: "name:string") { instance in
       return MPVFilter(rawString: instance.value(for: "name").stringValue + "=" + instance.value(for: "string").stringValue)!

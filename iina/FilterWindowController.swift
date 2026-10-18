@@ -407,6 +407,13 @@ class NewFilterSheetViewController: NSViewController, NSTableViewDelegate, NSTab
     tableView.dataSource = self
     tableView.delegate = self
     presets = filterWindow.filterType == MPVProperty.vf ? FilterPreset.vfPresets : FilterPreset.afPresets
+    // The presets are named from FilterPresets.strings, which is read off the main thread first.
+    FilterPreset.load { [weak self] in self?.showPresets() }
+  }
+
+  /// Show the presets by their localized names, fitting the table to the widest, and select the first if none is selected.
+  private func showPresets() {
+    tableView.reloadData()
 
     // Different locales have different text width requirements. Examine all content and fit table to widest item.
     var maxWidth = 0.0
