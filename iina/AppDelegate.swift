@@ -130,6 +130,23 @@ class AppDelegate: NSObject, NSApplicationDelegate, SPUUpdaterDelegate {
   }
 
 
+  /// Log the versions of mpv, FFmpeg and its libraries, and libass. The versions mpv reports are read without the calling thread
+  /// waiting for the defaults' mpv to start, and the dependencies are logged together on the main thread once they are read.
+  static func logDependencyVersions() {
+    MPVOptionDefaults.shared.versions { mpvVersion, libassVersion in
+      Logger.log(mpvVersion)
+      Logger.log("FFmpeg \(String(cString: av_version_info()))")
+      // FFmpeg libraries and their versions in alphabetical order.
+      let libraries: [(name: String, version: UInt32)] = [("libavcodec", avcodec_version()), ("libavformat", avformat_version()), ("libavutil", avutil_version()), ("libswscale", swscale_version())]
+      for library in libraries {
+        // The version of FFmpeg libraries is encoded into an unsigned integer in a proprietary
+        // format which needs to be decoded into a string for display.
+        Logger.log("  \(library.name) \(AppDelegate.versionAsString(library.version))")
+      }
+      Logger.log("libass \(libassVersion)")
+    }
+  }
+
   /// Log details about when and from what sources IINA was built.
   ///
   /// For developers that take a development build to other machines for testing it is useful to log information that can be used to
@@ -226,20 +243,8 @@ class AppDelegate: NSObject, NSApplicationDelegate, SPUUpdaterDelegate {
     }
 
     // Useful to know the versions of significant dependencies that are being used so log that
-    // information as well when it can be obtained. The versions mpv reports are read without the main thread waiting for the
-    // defaults' mpv to start, and the dependencies are logged together once they are read.
-    MPVOptionDefaults.shared.versions { mpvVersion, libassVersion in
-      Logger.log(mpvVersion)
-      Logger.log("FFmpeg \(String(cString: av_version_info()))")
-      // FFmpeg libraries and their versions in alphabetical order.
-      let libraries: [(name: String, version: UInt32)] = [("libavcodec", avcodec_version()), ("libavformat", avformat_version()), ("libavutil", avutil_version()), ("libswscale", swscale_version())]
-      for library in libraries {
-        // The version of FFmpeg libraries is encoded into an unsigned integer in a proprietary
-        // format which needs to be decoded into a string for display.
-        Logger.log("  \(library.name) \(AppDelegate.versionAsString(library.version))")
-      }
-      Logger.log("libass \(libassVersion)")
-    }
+    // information as well when it can be obtained.
+    AppDelegate.logDependencyVersions()
 
     logBuildDetails()
     logPlatformDetails()
