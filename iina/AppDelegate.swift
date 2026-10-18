@@ -132,6 +132,14 @@ class AppDelegate: NSObject, NSApplicationDelegate, SPUUpdaterDelegate {
   }
 
 
+  /// Log the configuration `mpv` was built with at the verbose level, reading it without the calling thread waiting for `mpv`.
+  static func logMPVConfiguration(of mpv: MPVController) {
+    guard Preference.integer(for: .logLevel) <= Logger.Level.verbose.rawValue else { return }
+    mpv.getNodesAsync([MPVProperty.mpvConfiguration]) { values in
+      Logger.log("Configuration when building mpv: \(values[0] as? String ?? "")", level: .verbose)
+    }
+  }
+
   /// Log the versions of mpv, FFmpeg and its libraries, and libass. The versions mpv reports are read without the calling thread
   /// waiting for the defaults' mpv to start, and the dependencies are logged together on the main thread once they are read.
   static func logDependencyVersions() {
@@ -381,8 +389,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, SPUUpdaterDelegate {
     JavascriptPlugin.loadPlugins { [self] in
       JavascriptPlugin.loadGlobalInstances()
 
-      let mpv = PlayerCore.active.mpv!
-      Logger.log("Configuration when building mpv: \(mpv.getString(MPVProperty.mpvConfiguration)!)", level: .verbose)
+      AppDelegate.logMPVConfiguration(of: PlayerCore.active.mpv)
 
       // if have pending open request
       if let url = pendingURL {
