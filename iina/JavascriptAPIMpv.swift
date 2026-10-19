@@ -33,7 +33,7 @@ class JavascriptAPIMpv: JavascriptAPI, JavascriptAPIMpvExportable {
   // The getters read the property without the calling thread waiting for mpv, and return a promise settled on the main thread with
   // the value mpv answers: false, 0 or null for a property mpv could not read.
   @objc func getFlag(_ property: String) -> JSValue {
-    let mpv = player!.mpv
+    let mpv: MPVController = player!.mpv
     return createPromise { resolve, _ in
       mpv.getFlagAsync(property) { value in
         DispatchQueue.main.async { resolve.call(withArguments: [value ?? false]) }
@@ -42,7 +42,7 @@ class JavascriptAPIMpv: JavascriptAPI, JavascriptAPIMpvExportable {
   }
 
   @objc func getNumber(_ property: String) -> JSValue {
-    let mpv = player!.mpv
+    let mpv: MPVController = player!.mpv
     return createPromise { resolve, _ in
       mpv.getDoublesAsync([property]) { values in
         DispatchQueue.main.async { resolve.call(withArguments: [values[0] ?? 0]) }
@@ -51,7 +51,7 @@ class JavascriptAPIMpv: JavascriptAPI, JavascriptAPIMpvExportable {
   }
 
   @objc func getString(_ property: String) -> JSValue {
-    let mpv = player!.mpv
+    let mpv: MPVController = player!.mpv
     return createPromise { resolve, _ in
       mpv.getStringsAsync([property]) { values in
         DispatchQueue.main.async { resolve.call(withArguments: [values[0] ?? NSNull()]) }
@@ -60,7 +60,7 @@ class JavascriptAPIMpv: JavascriptAPI, JavascriptAPIMpvExportable {
   }
 
   @objc func getNative(_ property: String) -> JSValue {
-    let mpv = player!.mpv
+    let mpv: MPVController = player!.mpv
     return createPromise { resolve, _ in
       mpv.getNodeAsync(property) { value in
         DispatchQueue.main.async { resolve.call(withArguments: [value ?? NSNull()]) }
