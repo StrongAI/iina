@@ -441,6 +441,12 @@ class Utility {
   }()
 
   static let pluginsURL: URL = {
+    // The app hosting iinaTests, which the iina scheme's test action marks with IINA_TEST_HOST, keeps its plugins in a temporary
+    // folder of its own for the run, so that it loads none of the user's plugins and the tests install theirs outside the user's.
+    if ProcessInfo.processInfo.environment["IINA_TEST_HOST"] != nil {
+      return FileManager.default.temporaryDirectory
+        .appendingPathComponent("iinaTests-plugins-\(ProcessInfo.processInfo.processIdentifier)", isDirectory: true)
+    }
     let url = Utility.appSupportDirUrl.appendingPathComponent(AppData.pluginsFolder, isDirectory: true)
     return url
   }()
