@@ -1179,6 +1179,13 @@ class MPVController: NSObject {
     }
   }
 
+  /// Read the given properties asynchronously as numbers, as `getDouble` reads them, without waiting for `mpv`, see `getNodesAsync`.
+  func getDoublesAsync(_ names: [String], reply: @escaping ([Double?]) -> Void) {
+    getPropertiesAsync(names, format: MPV_FORMAT_DOUBLE, reply: { reply($0.map { $0 as? Double }) }) { double in
+      double.load(as: Double.self)
+    }
+  }
+
   /// Read the given properties asynchronously in the given format, without waiting for `mpv`, see `getNodesAsync`.
   /// - Parameter read: Makes the value of a property from the data `mpv` answers in `format`.
   private func getPropertiesAsync(_ names: [String], format: mpv_format, reply: @escaping ([Any?]) -> Void,

@@ -321,16 +321,17 @@ fileprivate class StatusAPI: JavascriptAPI, CoreSubAPIExportable {
       return player!.info.state == .paused
     case "idle":
       return player!.info.state == .idle
-    case "position":
-      // On main and waiting for mpv: a plugin's script runs on the main thread and this getter answers it at once, as every
-      // getter of the mpv API does.
-      player!.syncPositionIfNeededWaiting()
-      return player!.info.videoPosition?.second ?? NSNull()
-    case "duration":
-      // When streaming the duration changes. Syncing the position will also update the duration. On main and waiting for mpv,
-      // as for the position.
-      player!.syncPositionIfNeededWaiting()
-      return player!.info.videoDuration?.second ?? NSNull()
+    case "position", "duration":
+      // A promise settled on the main thread once the cached position is up to date, mpv having answered when the time is not kept
+      // up to date, so that the plugin's script does not wait for mpv. When streaming the duration changes, and syncing the position
+      // also updates the duration.
+      let player = player!
+      return createPromise { resolve, _ in
+        player.syncPositionIfNeeded {
+          let value = prop == "position" ? player.info.videoPosition?.second : player.info.videoDuration?.second
+          resolve.call(withArguments: [value ?? NSNull()])
+        }
+      }
     case "speed":
       return player!.info.playSpeed
     case "videoWidth":

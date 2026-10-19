@@ -3263,19 +3263,6 @@ class PlayerCore: NSObject {
     syncPosition(then: completion)
   }
 
-  /// Synchronize the cached video position if the timer that updates the cache is not running, waiting for `mpv`.
-  ///
-  /// - Important: This waits for `mpv`. It serves only the JavaScript status API, whose getters run on the main thread and must
-  ///     answer a plugin at once; every other caller uses `syncPositionIfNeeded(then:)`.
-  func syncPositionIfNeededWaiting() {
-    if let syncUITimer, syncUITimer.isValid { return }
-    guard info.state.active else { return }
-    if info.isNetworkResource {
-      info.videoDuration?.second = mpv.getDouble(MPVProperty.duration)
-    }
-    storePosition(eofReached: mpv.getFlag(MPVProperty.eofReached), timePos: mpv.getDouble(MPVProperty.timePos))
-  }
-
   // difficult to use option set
   enum SyncUIOption {
     case time

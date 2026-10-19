@@ -10,10 +10,10 @@ import Foundation
 import JavaScriptCore
 
 @objc protocol JavascriptAPIMpvExportable: JSExport {
-  func getFlag(_ property: String) -> Bool
-  func getNumber(_ property: String) -> Double
-  func getString(_ property: String) -> String?
-  func getNative(_ property: String) -> Any?
+  func getFlag(_ property: String) -> JSValue
+  func getNumber(_ property: String) -> JSValue
+  func getString(_ property: String) -> JSValue
+  func getNative(_ property: String) -> JSValue
   func set(_ property: String, _ value: JSValue)
   func command(_ commandName: String, _ args: [String])
   func addHook(_ name: String, _ priority: Int, _ callback: JSValue)
@@ -30,23 +30,42 @@ class JavascriptAPIMpv: JavascriptAPI, JavascriptAPIMpvExportable {
     player!.mpv.removeHooks(withIdentifier: identifier)
   }
 
-  // The getters wait for mpv on the calling thread, the main thread for most plugin scripts. They return the value of any property
-  // to the script at once, which a value mpv has already reported cannot do for the properties IINA does not observe, and answering
-  // asynchronously would change the plugin API, so they are kept waiting by the user's ruling.
-  @objc func getFlag(_ property: String) -> Bool {
-    return player!.mpv.getFlag(property)
+  // The getters read the property without the calling thread waiting for mpv, and return a promise settled on the main thread with
+  // the value mpv answers: false, 0 or null for a property mpv could not read.
+  @objc func getFlag(_ property: String) -> JSValue {
+    let mpv = player!.mpv
+    return createPromise { resolve, _ in
+      mpv.getFlagAsync(property) { value in
+        DispatchQueue.main.async { resolve.call(withArguments: [value ?? false]) }
+      }
+    }
   }
 
-  @objc func getNumber(_ property: String) -> Double {
-    return player!.mpv.getDouble(property)
+  @objc func getNumber(_ property: String) -> JSValue {
+    let mpv = player!.mpv
+    return createPromise { resolve, _ in
+      mpv.getDoublesAsync([property]) { values in
+        DispatchQueue.main.async { resolve.call(withArguments: [values[0] ?? 0]) }
+      }
+    }
   }
 
-  @objc func getString(_ property: String) -> String? {
-    return player!.mpv.getString(property)
+  @objc func getString(_ property: String) -> JSValue {
+    let mpv = player!.mpv
+    return createPromise { resolve, _ in
+      mpv.getStringsAsync([property]) { values in
+        DispatchQueue.main.async { resolve.call(withArguments: [values[0] ?? NSNull()]) }
+      }
+    }
   }
 
-  @objc func getNative(_ property: String) -> Any? {
-    return player!.mpv.getNode(property)
+  @objc func getNative(_ property: String) -> JSValue {
+    let mpv = player!.mpv
+    return createPromise { resolve, _ in
+      mpv.getNodeAsync(property) { value in
+        DispatchQueue.main.async { resolve.call(withArguments: [value ?? NSNull()]) }
+      }
+    }
   }
 
   @objc func set(_ property: String, _ value: JSValue) {
