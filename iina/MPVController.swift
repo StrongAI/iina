@@ -1116,8 +1116,14 @@ class MPVController: NSObject {
     return T.init(rawValue: value) ?? T.defaultValue
   }
 
+  /// Read the given integer property, waiting for `mpv`.
+  ///
+  /// The synchronous readers read the handle once and read nothing once it is `nil`, returning what a failed read returns. The main
+  /// thread sets the handle to `nil` before it is destroyed on the queue for reading `mpv` events, so a read on that queue, such as
+  /// those an event makes, goes through a handle that is not yet destroyed, or through none, instead of handing `mpv` a `nil` handle.
   func getInt(_ name: String) -> Int {
     if let value = madeBehindRawCommand({ getInt(name) }) { return value }
+    guard let mpv else { return 0 }
     var data = Int64()
     mpv_get_property(mpv, name, MPV_FORMAT_INT64, &data)
     return Int(data)
@@ -1125,6 +1131,7 @@ class MPVController: NSObject {
 
   func getDouble(_ name: String) -> Double {
     if let value = madeBehindRawCommand({ getDouble(name) }) { return value }
+    guard let mpv else { return 0 }
     var data = Double()
     mpv_get_property(mpv, name, MPV_FORMAT_DOUBLE, &data)
     return data
@@ -1132,6 +1139,7 @@ class MPVController: NSObject {
 
   func getFlag(_ name: String) -> Bool {
     if let flag = madeBehindRawCommand({ getFlag(name) }) { return flag }
+    guard let mpv else { return false }
     var data = Int32()
     mpv_get_property(mpv, name, MPV_FORMAT_FLAG, &data)
     return data > 0
@@ -1229,6 +1237,7 @@ class MPVController: NSObject {
 
   func getString(_ name: String) -> String? {
     if let value = madeBehindRawCommand({ getString(name) }) { return value }
+    guard let mpv else { return nil }
     let cstr = mpv_get_property_string(mpv, name)
     let str: String? = cstr == nil ? nil : String(cString: cstr!)
     mpv_free(cstr)
@@ -1402,6 +1411,7 @@ class MPVController: NSObject {
 
   func getNode(_ name: String) -> Any? {
     if let value = madeBehindRawCommand({ getNode(name) }) { return value }
+    guard let mpv else { return nil }
     var node = mpv_node()
     mpv_get_property(mpv, name, MPV_FORMAT_NODE, &node)
     let parsed = try? MPVNode.parse(node)
