@@ -2435,8 +2435,9 @@ class PlayerCore: NSObject {
                trackList: readTrackList(),
                selectedTracks: readSelectedTracks(),
                chapters: readChapters(),
-               abLoopA: abLoopA,
-               abLoopB: abLoopB,
+               // A loop point mpv holds as not set, which it gives as "no", reads as zero.
+               abLoopA: mpv.getDouble(MPVOption.PlaybackControl.abLoopA),
+               abLoopB: mpv.getDouble(MPVOption.PlaybackControl.abLoopB),
                fullscreen: mpv.getFlag(MPVOption.Window.fullscreen),
                ontop: mpv.getFlag(MPVOption.Window.ontop))
   }
