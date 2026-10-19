@@ -164,9 +164,9 @@ class ViewLayer: CAOpenGLLayer {
 
   override func canDraw(inCGLContext ctx: CGLContextObj, pixelFormat pf: CGLPixelFormatObj,
                         forLayerTime t: CFTimeInterval, displayTime ts: UnsafePointer<CVTimeStamp>?) -> Bool {
-    // When in live resize, skip all drawing calls on the main thread.
-    // Setting isAsynchronous = true is enough to prevent jittering.
-    guard !(inLiveResize && Thread.isMainThread) else { return false }
+    // The layer is drawn only on mpvGLQueue, see display(), so on the main thread it answers no without waiting for the uninit lock
+    // or asking mpv's renderer, keeping its contents. During live resize, isAsynchronous = true is enough to prevent jittering.
+    guard !Thread.isMainThread else { return false }
     return videoView.$isUninited.withReadLock() { isUninited in
       guard !isUninited else { return false }
       if !inLiveResize {
