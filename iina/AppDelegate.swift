@@ -944,7 +944,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, SPUUpdaterDelegate {
     
     if parsed.scheme != "iina" {
       // try to open the URL directly
-      PlayerCore.activeOrNewForMenuAction(isAlternative: false).openURLString(url)
+      PlayerCore.activeOrNew.openURLString(url)
       return
     }
     
@@ -967,7 +967,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, SPUUpdaterDelegate {
       if let newWindowValue = queryDict["new_window"], newWindowValue == "1" {
         player = PlayerCore.newPlayerCore
       } else {
-        player = PlayerCore.activeOrNewForMenuAction(isAlternative: false)
+        player = PlayerCore.activeOrNew
       }
 
       // enqueue
@@ -1018,18 +1018,20 @@ class AppDelegate: NSObject, NSApplicationDelegate, SPUUpdaterDelegate {
     panel.canChooseDirectories = true
     panel.allowsMultipleSelection = true
     if panel.runModal() == .OK {
-      openChosenFiles(panel.urls)
+      openChosenFiles(panel.urls, isAlternative: (sender as? NSMenuItem)?.tag == AlternativeMenuItemTag)
     }
   }
 
   /// Open the files chosen in the Open panel, telling the user when none of them could be opened once they have been found.
-  func openChosenFiles(_ urls: [URL]) {
+  /// - Parameter isAlternative: Whether they were chosen through the alternative Open menu item, which inverts whether they are
+  ///     opened in a new window.
+  func openChosenFiles(_ urls: [URL], isAlternative: Bool = false) {
     if Preference.bool(for: .recordRecentFiles) {
       for url in urls {
         noteNewRecentDocumentURL(url)
       }
     }
-    PlayerCore.openURLs(urls) { count in
+    PlayerCore.openURLs(urls, invertOpenInNewWindow: isAlternative) { count in
       if count == 0 {
         Utility.showAlert("nothing_to_open")
       }

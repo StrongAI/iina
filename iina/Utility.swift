@@ -510,8 +510,6 @@ class Utility {
     case openInApp(URL, bundleID: String)
     /// Show the files in Finder, selected.
     case revealInFinder([URL])
-    /// Show the folder at the path in a Finder window.
-    case showFolderInFinder(String)
     /// Make the app with the bundle identifier the default app of the content type.
     case setDefaultApp(contentType: String, bundleID: String)
 
@@ -530,8 +528,6 @@ class Utility {
       case .revealInFinder(let urls):
         workspace.activateFileViewerSelecting(urls)
         return true
-      case .showFolderInFinder(let path):
-        return workspace.selectFile(nil, inFileViewerRootedAtPath: path)
       case .setDefaultApp(let contentType, let bundleID):
         let status = LSSetDefaultRoleHandlerForContentType(contentType as CFString, .all, bundleID as CFString)
         guard status == kOSReturnSuccess else {
@@ -618,11 +614,6 @@ class Utility {
   /// system.
   static func revealInFinder(filesAtPaths paths: [String]) {
     onWorkspaceQueue { _ = makeWorkspaceRequest(.revealInFinder(paths.map { URL(fileURLWithPath: $0) })) }
-  }
-
-  /// Show the folder at `path` in a Finder window.
-  static func showFolderInFinder(_ path: String) {
-    onWorkspaceQueue { _ = makeWorkspaceRequest(.showFolderInFinder(path)) }
   }
 
   // MARK: - Util functions

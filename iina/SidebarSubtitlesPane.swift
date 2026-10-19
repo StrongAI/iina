@@ -287,7 +287,7 @@ fileprivate class SubDelayView: SidebarSliderView {
   }
 
   override func resetButtonAction() {
-    player.setAudioDelay(0)
+    player.setSubDelay(0, forPrimary: isPrimary)
   }
 }
 
@@ -314,6 +314,8 @@ fileprivate class SubPositionDelayView: NSView {
     primarySwitch.selectedSegment = 0
     primarySwitch.setContentHuggingPriority(.init(100), for: .horizontal)
     primarySwitch.segmentDistribution = .fillEqually
+    primarySwitch.target = self
+    primarySwitch.action = #selector(switchAction)
 
     self.positionSlider = NSSlider()
     positionSlider.minValue = 0
@@ -362,6 +364,7 @@ fileprivate class SubPositionDelayView: NSView {
 
   @objc private func switchAction(_ sender: AnyObject) {
     isPrimary = primarySwitch.selectedSegment == 0
+    delayView.isPrimary = isPrimary
     update()
   }
 
@@ -482,10 +485,13 @@ fileprivate class SubStyleView: NSView {
     addSubview(stack)
     stack.padding(.all)
 
-    updateScale()
+    update()
     updateTextStyle()
     player.observe(.iinaSubScaleChanged) { [unowned self] _ in
-      updateScale()
+      update()
+    }
+    player.observe(.iinaSubFontChanged) { [unowned self] _ in
+      update()
     }
   }
 
@@ -509,7 +515,7 @@ fileprivate class SubStyleView: NSView {
     return colorWell
   }
 
-  private func updateScale() {
+  private func update() {
     // mpv does not report the font, so it is read without waiting for mpv and shown once mpv answers.
     player.mpv.getNodeAsync(MPVOption.Subtitles.subFont) { [weak self] subFont in
       DispatchQueue.main.async {

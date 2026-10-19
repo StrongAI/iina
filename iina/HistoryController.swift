@@ -133,8 +133,10 @@ class HistoryController: NSObject {
     }
   }
 
-  /// Remove every entry from playback history and save it, on the queue.
+  /// Forget the last played file, then remove every entry from playback history and save it, on the queue.
   func removeAll() {
+    Preference.set(nil, for: .iinaLastPlayedFilePath)
+    Preference.set(nil, for: .iinaLastPlayedFilePosition)
     $tasksOutstanding.withLock { $0 += 1 }
     Self.queue.async { [self] in
       $history.withLock { history in

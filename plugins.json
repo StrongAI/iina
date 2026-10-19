@@ -6,6 +6,12 @@
     "id": "dev.faruk.iina-airplay"
   },
   {
+    "name": "AniList Sync",
+    "url": "https://github.com/gridness/anilist-sync",
+    "desc": "Sync watched local anime episodes to AniList after playback reaches 85%.",
+    "id": "crown.gridness.iina.anilist-sync"
+  },
+  {
     "name": "Anime4K",
     "url": "https://github.com/yorkyang2333/iina-anime4k",
     "desc": "Apply Anime4K shaders for real-time anime upscaling.",
@@ -90,6 +96,12 @@
     "id": "io.iina.jump-to-frame"
   },
   {
+    "name": "Keystone",
+    "url": "https://github.com/lenadweb/iina-plugin-keystone",
+    "desc": "Vertical and horizontal keystone correction for projectors, adjusted live from the sidebar or the keyboard.",
+    "id": "io.github.lenadweb.keystone"
+  },
+  {
     "name": "ListenBrainz Scrobbler",
     "url": "https://git.notfire.cc/notfire/iina-listenbrainz",
     "desc": "Scrobble your music to ListenBrainz.",
@@ -118,6 +130,12 @@
     "url": "https://github.com/icsarisakal/iina-playlist-searchbox",
     "desc": "Search the current playlist by song title and artist.",
     "id": "com.icsarisakal.iina-searchbox"
+  },
+  {
+    "name": "Plex Sync",
+    "url": "https://github.com/kevllarco/iina-plex-sync",
+    "desc": "Sync local IINA playback progress and watched status to Plex.",
+    "id": "io.github.iina-plex-sync"
   },
   {
     "name": "PolyScript",
@@ -160,5 +178,11 @@
     "url": "https://github.com/fetzu/iina-plugin-vr2d",
     "desc": "Watch 3D VR videos (180°/360°, side-by-side or over-under, equirectangular or fisheye) as a flat 2D image you can pan and zoom. Detects VR sources automatically from file names and container metadata.",
     "id": "io.github.fetzu.vr2d"
+  },
+  {
+    "name": "WebDAV",
+    "url": "https://github.com/qydxyx/iina-webdav",
+    "desc": "Connect to a WebDAV server, browse media, and add files or folders to the current playlist.",
+    "id": "com.qydxyx.iina-webdav"
   }
 ]

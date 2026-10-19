@@ -322,6 +322,14 @@ class Titlebar: NSView {
     }
   }
 
+  override func mouseDown(with event: NSEvent) {
+    let point = titlebarContainer.convert(event.locationInWindow, from: nil)
+
+    if docIcon.frame.contains(point) && event.modifierFlags.contains(.command) {
+      showPathMenu()
+    }
+  }
+
   override func rightMouseUp(with event: NSEvent) {}
 
   func showPathMenu() {
@@ -358,14 +366,20 @@ class Titlebar: NSView {
     menu.autoenablesItems = false
     let point = NSPoint(x: -30, y: 0)  // make sure the first menu item is at the title's position
 
-    for (pathURL, name, icon) in items {
+    for (index, (_, name, icon)) in items.enumerated() {
       let item = NSMenuItem()
       item.title = name
       item.image = icon
       item.image?.size = NSSize(width: 16, height: 16)
-      item.representedObject = pathURL
-      item.target = self
-      item.action = #selector(revealInFinder(_:))
+      if #available(macOS 27.0, *) {
+        item.preferredImageVisibility = .visible
+      }
+      // Choosing a folder reveals the next path component in it; the document itself does nothing.
+      if index > 0 {
+        item.representedObject = items[index - 1].url
+        item.target = self
+        item.action = #selector(revealInFinder(_:))
+      }
       menu.addItem(item)
     }
 
@@ -374,7 +388,7 @@ class Titlebar: NSView {
 
   @objc private func revealInFinder(_ sender: NSMenuItem) {
     guard let url = sender.representedObject as? URL else { return }
-    Utility.showFolderInFinder(url.path)
+    Utility.revealInFinder([url])
   }
 
   private func updateShadow() {

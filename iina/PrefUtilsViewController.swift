@@ -151,12 +151,9 @@ class PrefUtilsViewController: PreferenceViewController, PreferenceWindowEmbedda
   @IBAction func clearHistoryBtnAction(_ sender: Any) {
     Utility.quickAskPanel("clear_history", sheetWindow: view.window) { respond in
       guard respond == .alertFirstButtonReturn else { return }
-      // The file is removed off the main thread.
-      Utility.removeItem(at: Utility.playbackHistoryURL) {
-        AppDelegate.shared.clearRecentDocuments(self)
-        Preference.set(nil, for: .iinaLastPlayedFilePath)
-        self.playHistoryClearedLabel.isHidden = false
-      }
+      HistoryController.shared.removeAll()
+      AppDelegate.shared.clearRecentDocuments(self)
+      self.playHistoryClearedLabel.isHidden = false
     }
   }
 

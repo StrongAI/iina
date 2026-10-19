@@ -1151,7 +1151,7 @@ struct Preference {
     .forceDedicatedGPU: false,
     .loadIccProfile: true,
     .enableHdrSupport: true,
-    .enableToneMapping: false,
+    .enableToneMapping: true,
     .toneMappingTargetPeak: 0,
     .enableToneMappingTargetPeakOverride: false,
     .toneMappingTargetPeakOverride: 400,
@@ -1473,6 +1473,7 @@ struct Preference {
            .followGlobalSeekTypeWhenAdjustSlider,
            .forceDedicatedGPU,
            .fullScreenWhenOpen,
+           .groupSimultaneousOpensInPlaylist,
            .ignoreAssStyles,
            .iinaEnablePluginSystem,
            .keepOpenOnFileEnd,
@@ -1604,7 +1605,10 @@ struct Preference {
       case .screenshotFormat:
         defaultAsString = String(describing: ScreenshotFormat.defaultValue)
         valueAsString = String(describing: Preference.enum(for: key) as ScreenshotFormat)
-      case .horizontalScrollAction, .verticalScrollAction:
+      case .horizontalScrollAction:
+        defaultAsString = String(describing: ScrollAction.seek)
+        valueAsString = String(describing: Preference.enum(for: key) as ScrollAction)
+      case .verticalScrollAction:
         defaultAsString = String(describing: ScrollAction.defaultValue)
         valueAsString = String(describing: Preference.enum(for: key) as ScrollAction)
       case .useExactSeek:

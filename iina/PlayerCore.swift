@@ -81,7 +81,9 @@ class PlayerCore: NSObject {
     return pc
   }
 
+  /// Similar to `activeOrNew`, but supports inverting the action
   static func activeOrNewForMenuAction(isAlternative: Bool) -> PlayerCore {
+    // since it's from a menu item, there is at least one player core
     let useNew = Preference.bool(for: .alwaysOpenInNewWindow) != isAlternative
     return useNew ? newPlayerCore : active
   }
@@ -94,11 +96,14 @@ class PlayerCore: NSObject {
    - Parameter completion: Called on the main thread once the files have been opened, with `nil`
    if no further action is needed, like opened a BD Folder; otherwise the count of playable files.
    */
-  static func openURLs(_ urls: [URL], completion: ((Int?) -> Void)? = nil) {
-    let openInCurrentWindow = !Preference.bool(for: .alwaysOpenInNewWindow)
+  static func openURLs(_ urls: [URL], invertOpenInNewWindow: Bool = false, completion: ((Int?) -> Void)? = nil) {
+    var openInCurrentWindow = !Preference.bool(for: .alwaysOpenInNewWindow)
+    if invertOpenInNewWindow {
+      openInCurrentWindow = !openInCurrentWindow
+    }
     if openInCurrentWindow {
       // open all urls in the active window if any (or, all in one new window)
-      activeOrNew.openURLs(urls, completion: completion)
+      active.openURLs(urls, completion: completion)
     } else if
       urls.count > 1,
       Preference.bool(for: .groupSimultaneousOpensInPlaylist)
@@ -2208,6 +2213,7 @@ class PlayerCore: NSObject {
 
   func setSubFont(_ font: String) {
     mpv.setStringAsync(MPVOption.Subtitles.subFont, font)
+    postNotification(.iinaSubFontChanged)
   }
 
   /// Store the file played and its position as the last played, if `mpv` saves the playback position on quit, without waiting for
@@ -2484,6 +2490,19 @@ class PlayerCore: NSObject {
     storeAbLoop(a: loadedFile.abLoopA, b: loadedFile.abLoopB)
     refreshSyncUITimer()
     touchBarSupport.setupTouchBarUI()
+
+    // Workaround mpv issue #18581 / IINA issue #6378. Newer iPhones can generate video files with
+    // two audio tracks, one encoded with the Apple Positional Audio Codec to support spatial audio
+    // and one stereo track. FFmpeg 9.0.2 does not support APAC (FFmpeg is adding support). If the
+    // APAC encoded track happens to be the first audio track, mpv will select it, fail to decode it
+    // and continue playback with no sound. Select the second track if this has occurred.
+    if info.aid == 0, info.audioTracks.count >= 2, info.audioTracks[0].codec == "apple_apac" {
+      log("""
+        Audio track 1 uses Apple Positional Audio Codec, switching to audio track 2:
+        \(info.audioTracks.compactMap { String(describing: $0) }.joined(separator: "\n"))
+        """, level: .warning)
+      setTrack(2, forType: .audio)
+    }
 
     if info.aid == 0 {
       mainWindow.muteButton.isHidden = true
