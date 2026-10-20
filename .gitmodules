@@ -1,0 +1,3 @@
+[submodule "iinaTests"]
+	path = iinaTests
+	url = https://github.com/StrongAI/iina-tests.git
