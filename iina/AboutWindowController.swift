@@ -109,7 +109,7 @@ class AboutWindowController: NSWindowController {
     }
 
     // The contribution and credits texts are read off the main thread and shown once they are read.
-    Self.queue.async {
+    Self.queue.async { [weak self] in
       let (contribution, credits) = (Self.readText("Contribution"), Self.readText("Credits"))
       DispatchQueue.main.async { [weak self] in
         guard let self else { return }

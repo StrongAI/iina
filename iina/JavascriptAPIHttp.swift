@@ -70,7 +70,7 @@ class JavascriptAPIHttp: JavascriptAPI, JavascriptAPIHttpExportable {
       let params = options?["params"] as? [String: String]
       let headers = options?["headers"] as? [String: String]
       let data = options?["data"] as? [String: Any]
-      return createPromise { resolve, reject in
+      return createPromise { [unowned self] resolve, reject in
         Just.request(method, url: url,
                      params: params ?? [:],
                      data: data ?? [:],
