@@ -82,6 +82,19 @@ IINA uses mpv for media playback. To build IINA, you can either fetch copies of 
 
 8. Build the project.
 
+## Tests
+
+The test suite lives in its own repository, [StrongAI/iina-tests](https://github.com/StrongAI/iina-tests), checked out here as a git submodule at `iinaTests/`. Upstream IINA has no automated tests: a test target offered in [iina/iina#6492](https://github.com/iina/iina/pull/6492) was closed with "We don't consider adding tests for now." So we maintain the tests separately.
+
+To run them, fetch the submodule and the libraries described in [Building](#building), then test the `iinaTests` scheme of `iina.xcworkspace`:
+
+```console
+git submodule update --init
+xcodebuild test -workspace iina.xcworkspace -scheme iinaTests -destination platform=macOS
+```
+
+In Xcode, open `iina.xcworkspace`, choose the `iinaTests` scheme, and use Product > Test.
+
 ## Contributing
 
 IINA is always looking for contributions, whether it's through bug reports, code, or new translations.

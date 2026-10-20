@@ -26,27 +26,8 @@
       buildConfiguration = "Debug"
       selectedDebuggerIdentifier = "Xcode.DebuggerFoundation.Debugger.LLDB"
       selectedLauncherIdentifier = "Xcode.DebuggerFoundation.Launcher.LLDB"
-      shouldUseLaunchSchemeArgsEnv = "NO"
-      codeCoverageEnabled = "YES">
-      <Testables>
-         <TestableReference
-            skipped = "NO">
-            <BuildableReference
-               BuildableIdentifier = "primary"
-               BlueprintIdentifier = "E7A15E000000000000000031"
-               BuildableName = "iinaTests.xctest"
-               BlueprintName = "iinaTests"
-               ReferencedContainer = "container:iina.xcodeproj">
-            </BuildableReference>
-         </TestableReference>
-      </Testables>
-      <EnvironmentVariables>
-         <EnvironmentVariable
-            key = "IINA_TEST_HOST"
-            value = "1"
-            isEnabled = "YES">
-         </EnvironmentVariable>
-      </EnvironmentVariables>
+      shouldUseLaunchSchemeArgsEnv = "YES"
+      shouldAutocreateTestPlan = "YES">
    </TestAction>
    <LaunchAction
       buildConfiguration = "Debug"

@@ -384,21 +384,6 @@
 		E3FC31461FE1501E00B9B86F /* PowerSource.swift in Sources */ = {isa = PBXBuildFile; fileRef = E3FC31451FE1501E00B9B86F /* PowerSource.swift */; };
 		E3FEC1332A30400F00CFD845 /* PluginInputManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = E3FEC1322A30400F00CFD845 /* PluginInputManager.swift */; };
 		E3FF5AC02938582F0019CE45 /* JavascriptDevTool.swift in Sources */ = {isa = PBXBuildFile; fileRef = E3FF5ABF2938582F0019CE45 /* JavascriptDevTool.swift */; };
-		E7A15E000000000000000013 /* PlaylistSteppingTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = E7A15E000000000000000003 /* PlaylistSteppingTests.swift */; };
-		E7A15E000000000000000014 /* EntryStartTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = E7A15E000000000000000004 /* EntryStartTests.swift */; };
-		E7A15E000000000000000015 /* FolderPlaylistTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = E7A15E000000000000000005 /* FolderPlaylistTests.swift */; };
-		E7A15E000000000000000016 /* ScrollSeekTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = E7A15E000000000000000006 /* ScrollSeekTests.swift */; };
-		E7A15E000000000000000017 /* CacheConfigurationTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = E7A15E000000000000000007 /* CacheConfigurationTests.swift */; };
-		E7A15E000000000000000018 /* ThumbnailScanTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = E7A15E000000000000000008 /* ThumbnailScanTests.swift */; };
-		E7A15E000000000000000019 /* TestVideo.swift in Sources */ = {isa = PBXBuildFile; fileRef = E7A15E000000000000000009 /* TestVideo.swift */; };
-		E7A15E00000000000000001A /* MPVReplyCallbacksTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = E7A15E00000000000000000A /* MPVReplyCallbacksTests.swift */; };
-		E7A15E00000000000000001B /* FullLengthTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = E7A15E00000000000000000B /* FullLengthTests.swift */; };
-		E7A15E00000000000000001C /* MPVAsyncRequestTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = E7A15E00000000000000000C /* MPVAsyncRequestTests.swift */; };
-		E7A15E00000000000000001D /* fragmented.mp4 in Resources */ = {isa = PBXBuildFile; fileRef = E7A15E00000000000000000D /* fragmented.mp4 */; };
-		E7A15E00000000000000001E /* PlayerSteppingTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = E7A15E00000000000000000E /* PlayerSteppingTests.swift */; };
-		E7A15E00000000000000001F /* ObjcUtilsTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = E7A15E00000000000000000F /* ObjcUtilsTests.swift */; };
-		E7A15E000000000000000020 /* PlayerPlaybackTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = E7A15E000000000000000010 /* PlayerPlaybackTests.swift */; };
-		E7A15E000000000000000022 /* MPVCoreHold.swift in Sources */ = {isa = PBXBuildFile; fileRef = E7A15E000000000000000011 /* MPVCoreHold.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -422,13 +407,6 @@
 			proxyType = 1;
 			remoteGlobalIDString = E38558862A484A2D0083772D;
 			remoteInfo = "iina-plugin";
-		};
-		E7A15E000000000000000041 /* PBXContainerItemProxy */ = {
-			isa = PBXContainerItemProxy;
-			containerPortal = 84EB1ECE1D2F51D3004FA5A1 /* Project object */;
-			proxyType = 1;
-			remoteGlobalIDString = 84EB1ED51D2F51D3004FA5A1;
-			remoteInfo = iina;
 		};
 /* End PBXContainerItemProxy section */
 
@@ -1844,23 +1822,6 @@
 		FB011A0421F8C04200477551 /* hi */ = {isa = PBXFileReference; lastKnownFileType = text.plist.strings; name = hi; path = hi.lproj/Localizable.strings; sourceTree = "<group>"; };
 		FB011A0621F8C04200477551 /* hi */ = {isa = PBXFileReference; lastKnownFileType = text.plist.strings; name = hi; path = hi.lproj/FilterPresets.strings; sourceTree = "<group>"; };
 		FB011A0721F8C04200477551 /* hi */ = {isa = PBXFileReference; lastKnownFileType = text.plist.strings; name = hi; path = hi.lproj/KeyBinding.strings; sourceTree = "<group>"; };
-		E7A15E000000000000000001 /* iinaTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = iinaTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
-		E7A15E000000000000000002 /* iinaTests.xcconfig */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = text.xcconfig; path = iinaTests.xcconfig; sourceTree = "<group>"; };
-		E7A15E000000000000000003 /* PlaylistSteppingTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PlaylistSteppingTests.swift; sourceTree = "<group>"; };
-		E7A15E000000000000000004 /* EntryStartTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EntryStartTests.swift; sourceTree = "<group>"; };
-		E7A15E000000000000000005 /* FolderPlaylistTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FolderPlaylistTests.swift; sourceTree = "<group>"; };
-		E7A15E000000000000000006 /* ScrollSeekTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScrollSeekTests.swift; sourceTree = "<group>"; };
-		E7A15E000000000000000007 /* CacheConfigurationTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CacheConfigurationTests.swift; sourceTree = "<group>"; };
-		E7A15E000000000000000008 /* ThumbnailScanTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ThumbnailScanTests.swift; sourceTree = "<group>"; };
-		E7A15E000000000000000009 /* TestVideo.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TestVideo.swift; sourceTree = "<group>"; };
-		E7A15E00000000000000000A /* MPVReplyCallbacksTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MPVReplyCallbacksTests.swift; sourceTree = "<group>"; };
-		E7A15E00000000000000000B /* FullLengthTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FullLengthTests.swift; sourceTree = "<group>"; };
-		E7A15E00000000000000000C /* MPVAsyncRequestTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MPVAsyncRequestTests.swift; sourceTree = "<group>"; };
-		E7A15E00000000000000000D /* fragmented.mp4 */ = {isa = PBXFileReference; lastKnownFileType = file; path = fragmented.mp4; sourceTree = "<group>"; };
-		E7A15E00000000000000000E /* PlayerSteppingTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PlayerSteppingTests.swift; sourceTree = "<group>"; };
-		E7A15E00000000000000000F /* ObjcUtilsTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ObjcUtilsTests.swift; sourceTree = "<group>"; };
-		E7A15E000000000000000010 /* PlayerPlaybackTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PlayerPlaybackTests.swift; sourceTree = "<group>"; };
-		E7A15E000000000000000011 /* MPVCoreHold.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MPVCoreHold.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -1945,13 +1906,6 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
-		E7A15E000000000000000033 /* Frameworks */ = {
-			isa = PBXFrameworksBuildPhase;
-			buildActionMask = 2147483647;
-			files = (
-			);
-			runOnlyForDeploymentPostprocessing = 0;
-		};
 /* End PBXFrameworksBuildPhase section */
 
 /* Begin PBXGroup section */
@@ -1975,7 +1929,6 @@
 				4964988B2919E47900CD61A5 /* iina-cli.xcconfig */,
 				515B5E592A579782001FCD49 /* iina-plugin.xcconfig */,
 				496498882919E47900CD61A5 /* iina.xcconfig */,
-				E7A15E000000000000000002 /* iinaTests.xcconfig */,
 				4964988E2919E47900CD61A5 /* OpenInIINA.xcconfig */,
 				4964988A2919E47900CD61A5 /* Shared.xcconfig */,
 				4964988C2919E47900CD61A5 /* Debug.xcconfig */,
@@ -2428,7 +2381,6 @@
 				E3DE8DCB1FD8166A0021921C /* iina-cli */,
 				E38558882A484A2D0083772D /* iina-plugin */,
 				49542976216C34950058F680 /* OpenInIINA */,
-				E7A15E000000000000000021 /* iinaTests */,
 				84EB1ED71D2F51D3004FA5A1 /* Products */,
 				8461BA641E42344D008BB852 /* Executables */,
 				848290731D95978100C3C76C /* Frameworks */,
@@ -2445,7 +2397,6 @@
 				E3DE8DCA1FD8166A0021921C /* iina-cli */,
 				49542973216C34950058F680 /* OpenInIINA.appex */,
 				E38558872A484A2D0083772D /* iina-plugin */,
-				E7A15E000000000000000001 /* iinaTests.xctest */,
 			);
 			name = Products;
 			sourceTree = "<group>";
@@ -2641,28 +2592,6 @@
 			path = "iina-cli";
 			sourceTree = "<group>";
 		};
-		E7A15E000000000000000021 /* iinaTests */ = {
-			isa = PBXGroup;
-			children = (
-				E7A15E000000000000000007 /* CacheConfigurationTests.swift */,
-				E7A15E000000000000000004 /* EntryStartTests.swift */,
-				E7A15E000000000000000005 /* FolderPlaylistTests.swift */,
-				E7A15E00000000000000000B /* FullLengthTests.swift */,
-				E7A15E00000000000000000C /* MPVAsyncRequestTests.swift */,
-				E7A15E00000000000000000D /* fragmented.mp4 */,
-				E7A15E00000000000000000E /* PlayerSteppingTests.swift */,
-				E7A15E00000000000000000F /* ObjcUtilsTests.swift */,
-				E7A15E000000000000000010 /* PlayerPlaybackTests.swift */,
-				E7A15E000000000000000011 /* MPVCoreHold.swift */,
-				E7A15E00000000000000000A /* MPVReplyCallbacksTests.swift */,
-				E7A15E000000000000000003 /* PlaylistSteppingTests.swift */,
-				E7A15E000000000000000006 /* ScrollSeekTests.swift */,
-				E7A15E000000000000000009 /* TestVideo.swift */,
-				E7A15E000000000000000008 /* ThumbnailScanTests.swift */,
-			);
-			path = iinaTests;
-			sourceTree = "<group>";
-		};
 /* End PBXGroup section */
 
 /* Begin PBXNativeTarget section */
@@ -2756,24 +2685,6 @@
 			productReference = E3DE8DCA1FD8166A0021921C /* iina-cli */;
 			productType = "com.apple.product-type.tool";
 		};
-		E7A15E000000000000000031 /* iinaTests */ = {
-			isa = PBXNativeTarget;
-			buildConfigurationList = E7A15E000000000000000051 /* Build configuration list for PBXNativeTarget "iinaTests" */;
-			buildPhases = (
-				E7A15E000000000000000032 /* Sources */,
-				E7A15E000000000000000033 /* Frameworks */,
-				E7A15E000000000000000034 /* Resources */,
-			);
-			buildRules = (
-			);
-			dependencies = (
-				E7A15E000000000000000042 /* PBXTargetDependency */,
-			);
-			name = iinaTests;
-			productName = iinaTests;
-			productReference = E7A15E000000000000000001 /* iinaTests.xctest */;
-			productType = "com.apple.product-type.bundle.unit-test";
-		};
 /* End PBXNativeTarget section */
 
 /* Begin PBXProject section */
@@ -2804,10 +2715,6 @@
 						DevelopmentTeam = 67CQ77V27R;
 						LastSwiftMigration = 1020;
 						ProvisioningStyle = Manual;
-					};
-					E7A15E000000000000000031 = {
-						CreatedOnToolsVersion = 26.6;
-						TestTargetID = 84EB1ED51D2F51D3004FA5A1;
 					};
 				};
 			};
@@ -2864,7 +2771,6 @@
 				E3DE8DC91FD8166A0021921C /* iina-cli */,
 				E38558862A484A2D0083772D /* iina-plugin */,
 				49542972216C34950058F680 /* OpenInIINA */,
-				E7A15E000000000000000031 /* iinaTests */,
 			);
 		};
 /* End PBXProject section */
@@ -2926,14 +2832,6 @@
 				518DB7022FA6A2120024F0B0 /* write_info_plist_header.sh in Resources */,
 				8400D5DE1E1AB32A006785F5 /* PrefGeneralViewController.xib in Resources */,
 				8400D5C61E1AB2F1006785F5 /* MainWindowController.xib in Resources */,
-			);
-			runOnlyForDeploymentPostprocessing = 0;
-		};
-		E7A15E000000000000000034 /* Resources */ = {
-			isa = PBXResourcesBuildPhase;
-			buildActionMask = 2147483647;
-			files = (
-				E7A15E00000000000000001D /* fragmented.mp4 in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -3253,27 +3151,6 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
-		E7A15E000000000000000032 /* Sources */ = {
-			isa = PBXSourcesBuildPhase;
-			buildActionMask = 2147483647;
-			files = (
-				E7A15E000000000000000017 /* CacheConfigurationTests.swift in Sources */,
-				E7A15E000000000000000014 /* EntryStartTests.swift in Sources */,
-				E7A15E000000000000000015 /* FolderPlaylistTests.swift in Sources */,
-				E7A15E00000000000000001B /* FullLengthTests.swift in Sources */,
-				E7A15E00000000000000001C /* MPVAsyncRequestTests.swift in Sources */,
-				E7A15E00000000000000001E /* PlayerSteppingTests.swift in Sources */,
-				E7A15E00000000000000001F /* ObjcUtilsTests.swift in Sources */,
-				E7A15E000000000000000020 /* PlayerPlaybackTests.swift in Sources */,
-				E7A15E000000000000000022 /* MPVCoreHold.swift in Sources */,
-				E7A15E00000000000000001A /* MPVReplyCallbacksTests.swift in Sources */,
-				E7A15E000000000000000013 /* PlaylistSteppingTests.swift in Sources */,
-				E7A15E000000000000000016 /* ScrollSeekTests.swift in Sources */,
-				E7A15E000000000000000019 /* TestVideo.swift in Sources */,
-				E7A15E000000000000000018 /* ThumbnailScanTests.swift in Sources */,
-			);
-			runOnlyForDeploymentPostprocessing = 0;
-		};
 /* End PBXSourcesBuildPhase section */
 
 /* Begin PBXTargetDependency section */
@@ -3291,11 +3168,6 @@
 			isa = PBXTargetDependency;
 			target = E38558862A484A2D0083772D /* iina-plugin */;
 			targetProxy = 5180D7782C17DB0D00CC9C1C /* PBXContainerItemProxy */;
-		};
-		E7A15E000000000000000042 /* PBXTargetDependency */ = {
-			isa = PBXTargetDependency;
-			target = 84EB1ED51D2F51D3004FA5A1 /* iina */;
-			targetProxy = E7A15E000000000000000041 /* PBXContainerItemProxy */;
 		};
 /* End PBXTargetDependency section */
 
@@ -4859,34 +4731,6 @@
 			};
 			name = Release;
 		};
-		E7A15E000000000000000052 /* Debug */ = {
-			isa = XCBuildConfiguration;
-			baseConfigurationReference = E7A15E000000000000000002 /* iinaTests.xcconfig */;
-			buildSettings = {
-			};
-			name = Debug;
-		};
-		E7A15E000000000000000053 /* Release */ = {
-			isa = XCBuildConfiguration;
-			baseConfigurationReference = E7A15E000000000000000002 /* iinaTests.xcconfig */;
-			buildSettings = {
-			};
-			name = Release;
-		};
-		E7A15E000000000000000054 /* Beta */ = {
-			isa = XCBuildConfiguration;
-			baseConfigurationReference = E7A15E000000000000000002 /* iinaTests.xcconfig */;
-			buildSettings = {
-			};
-			name = Beta;
-		};
-		E7A15E000000000000000055 /* Nightly */ = {
-			isa = XCBuildConfiguration;
-			baseConfigurationReference = E7A15E000000000000000002 /* iinaTests.xcconfig */;
-			buildSettings = {
-			};
-			name = Nightly;
-		};
 /* End XCBuildConfiguration section */
 
 /* Begin XCConfigurationList section */
@@ -4941,17 +4785,6 @@
 				E3DE8DCF1FD8166A0021921C /* Release */,
 				51A0F0F429FA2C65000130CF /* Beta */,
 				51537C7029FA25D000F9A472 /* Nightly */,
-			);
-			defaultConfigurationIsVisible = 0;
-			defaultConfigurationName = Release;
-		};
-		E7A15E000000000000000051 /* Build configuration list for PBXNativeTarget "iinaTests" */ = {
-			isa = XCConfigurationList;
-			buildConfigurations = (
-				E7A15E000000000000000052 /* Debug */,
-				E7A15E000000000000000053 /* Release */,
-				E7A15E000000000000000054 /* Beta */,
-				E7A15E000000000000000055 /* Nightly */,
 			);
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;
